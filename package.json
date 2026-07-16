@@ -1,10 +1,11 @@
 {
   "name": "as-adventurer",
-  "version": "1.0.0",
-  "description": "⚔️ AS Adventurer — VTuber Creation Pipeline by Angel's Sword Studios",
+  "version": "1.1.0",
+  "description": "⚔️ AS Adventurer — VTuber Creation Pipeline by Angel's Sword Studios (OpenAI + Gemini + Grok SuperGrok OAuth)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
     "express": "^4.21.0",
