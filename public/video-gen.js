@@ -14,9 +14,9 @@
     // ============================================
     let generating = false;
     let cancelled = false;
-    let referenceImages = []; // Array of { dataUrl, base64 }
+    let referenceImages = []; // Array of { dataUrl }
     let generatedVideos = [];  // Array of { blob, url }
-    let selectedVideos = new Set(); // Indices of selected videos
+    let selectedVideos = new Set();
     let fromSpritePrep = false;
     let aiProvider = localStorage.getItem('vg_ai_provider') || 'gemini'; // 'gemini' | 'grok'
 
@@ -30,13 +30,11 @@
             referenceImages = [{ dataUrl: handoff.spriteBase64 }];
             fromSpritePrep = true;
 
-            // Show preview
             const preview = document.getElementById('vgRefImagePreview');
             const img = document.getElementById('vgRefImage');
             if (img) img.src = handoff.spriteBase64;
             preview?.classList.remove('hidden');
 
-            // Show "from sprite prep" indicator
             document.getElementById('vgRefFromSprite')?.classList.remove('hidden');
             document.getElementById('vgUploadZone')?.classList.add('hidden');
         }
@@ -58,7 +56,6 @@
                 loaded++;
 
                 if (loaded === maxFiles) {
-                    // Show first image preview
                     const preview = document.getElementById('vgRefImagePreview');
                     const img = document.getElementById('vgRefImage');
                     if (img) img.src = referenceImages[0].dataUrl;
@@ -85,7 +82,6 @@
 
         const provider = getSelectedProvider();
 
-        // Auth checks
         if (provider === 'gemini') {
             const apiKey = localStorage.getItem('google_api_key');
             if (!apiKey) {
@@ -109,7 +105,6 @@
             return;
         }
 
-        // Get mode early so we can validate keyframes
         const modeSelector = document.getElementById('vgModeSelector');
         const activeMode = modeSelector?.querySelector('.mode-btn.active');
         const mode = activeMode?.dataset.mode || 'reference';
@@ -119,13 +114,11 @@
             return;
         }
 
-        // Get settings
         const duration = parseInt(document.getElementById('vgDuration')?.value || '5');
         const genCountEl = document.getElementById('vgGenCount');
         const activeBtn = genCountEl?.querySelector('.gen-count-btn.active');
         const genCount = activeBtn ? parseInt(activeBtn.dataset.count) : 1;
 
-        // Read prompt from the correct field based on mode
         const prompt = mode === 'keyframe'
             ? (document.getElementById('vgKeyframePrompt')?.value?.trim() || '')
             : (document.getElementById('vgPrompt')?.value?.trim() || '');
@@ -133,7 +126,6 @@
         generating = true;
         cancelled = false;
 
-        // Show progress
         document.getElementById('vgProgress')?.classList.add('active');
         document.getElementById('vgGenerateBtn').disabled = true;
         const status = document.getElementById('vgStatus');
@@ -166,7 +158,6 @@
                 window.notificationSound?.play();
                 status.innerHTML = `<div class="status-msg success">✅ Generated ${generatedVideos.length} video(s) with ${providerLabel}!</div>`;
             } else if (!cancelled) {
-                // Collect actual error messages from failed attempts
                 const errors = results
                     .filter(r => r.status === 'rejected')
                     .map(r => r.reason?.message || String(r.reason));
@@ -185,7 +176,7 @@
         }
     }
 
-    // ---------- Gemini path (original) ----------
+    // ---------- Gemini path ----------
     async function generateOneGeminiVideo(apiKey, prompt, duration, mode) {
         const textPrompt = prompt || 'Generate a gentle breathing idle animation with slight body sway. Keep the character on the same background.';
 
@@ -193,7 +184,6 @@
             model: 'gemini-omni-flash-preview'
         };
 
-        // Build input — either a string (text-only) or an array (image + text)
         if (mode === 'keyframe' && referenceImages.length >= 2) {
             const startRef = referenceImages[0];
             const startRaw = startRef.dataUrl.includes(',') ? startRef.dataUrl.split(',')[1] : startRef.dataUrl;
@@ -222,7 +212,6 @@
             requestBody.input = textPrompt;
         }
 
-        // Send through proxy
         const response = await fetch('/api/video/generate', {
             method: 'POST',
             headers: {
@@ -245,7 +234,6 @@
     }
 
     function extractVideoFromGeminiResponse(data) {
-        // Pattern 1: Interactions API — steps[] with model_output
         if (data.steps && Array.isArray(data.steps)) {
             for (const step of data.steps) {
                 if (step.type === 'model_output' && step.content) {
@@ -260,7 +248,6 @@
             }
         }
 
-        // Pattern 2: generateContent format (candidates/parts) — fallback
         if (data.candidates) {
             for (const candidate of data.candidates) {
                 if (candidate.content?.parts) {
@@ -274,7 +261,6 @@
             }
         }
 
-        // Pattern 3: Nested result (from polled operation)
         if (data.result) {
             return extractVideoFromGeminiResponse(data.result);
         }
@@ -284,36 +270,85 @@
     }
 
     // ---------- Grok Imagine path ----------
+    // Docs: https://docs.x.ai/developers/model-capabilities/video/image-to-video
+    // POST /v1/videos/generations
+    // {
+    //   model: "grok-imagine-video-1.5",
+    //   prompt: "motion description string",
+    //   image: { url: "data:image/png;base64,..." },  // or public URL
+    //   duration: 5-15,
+    //   aspect_ratio: "16:9",
+    //   resolution: "720p"
+    // }
+    // → { request_id }
+    // poll GET /v1/videos/{request_id} until status === "done" → video.url
+
+    function toDataUri(dataUrl) {
+        if (!dataUrl) return null;
+        if (dataUrl.startsWith('data:')) return dataUrl;
+        // assume raw base64 PNG
+        return `data:image/png;base64,${dataUrl}`;
+    }
+
+    function formatApiError(err, status) {
+        if (!err) return `Grok video start failed: ${status}`;
+        if (typeof err === 'string') return err;
+        // xAI often returns { error: { message, code, type } } or { message }
+        const nested = err.error;
+        if (typeof nested === 'string') return nested;
+        if (nested?.message) {
+            const code = nested.code || nested.type || '';
+            return code ? `${nested.message} (${code})` : nested.message;
+        }
+        if (err.message) return err.message;
+        try {
+            return JSON.stringify(err).substring(0, 300);
+        } catch {
+            return `Grok video start failed: ${status}`;
+        }
+    }
+
     async function generateOneGrokVideo(prompt, duration, mode) {
         const token = await window.XaiOAuth.getAccessToken();
         if (!token) throw new Error('SuperGrok token unavailable — please re-login in Settings');
 
-        const textPrompt = prompt || 'Generate a gentle breathing idle animation with slight body sway. Keep the character on the same background. Perfect seamless loop. Static camera.';
+        let textPrompt = prompt ||
+            'Gentle breathing idle animation with slight body sway. Perfect seamless loop. Static locked-off camera. Keep the character and solid background exactly as in the source image.';
 
-        // Pick primary image (start frame for keyframe, first ref otherwise)
-        const ref = (mode === 'keyframe' && referenceImages.length >= 1)
-            ? referenceImages[0]
-            : referenceImages[0];
+        if (mode === 'keyframe') {
+            textPrompt = `Starting from this image as the first frame, animate a smooth transition. ${textPrompt}`;
+        }
 
+        const ref = referenceImages[0];
         if (!ref?.dataUrl) throw new Error('No reference image for Grok video');
 
-        let raw = ref.dataUrl.includes(',') ? ref.dataUrl.split(',')[1] : ref.dataUrl;
+        const dataUri = toDataUri(ref.dataUrl);
 
-        // Common Grok Imagine video image-to-video shape
+        // Clamp duration to typical Grok Imagine range (docs: ~5–15s; examples use 6, 10, 12)
+        let grokDuration = parseInt(duration, 10) || 5;
+        if (grokDuration < 1) grokDuration = 5;
+        if (grokDuration > 15) grokDuration = 15;
+
+        // Official image-to-video shape
         const body = {
-            model: 'grok-imagine-video',
-            prompt: {
-                image: raw,
-                text: mode === 'keyframe'
-                    ? `Starting from this image (start frame), animate a smooth transition. ${textPrompt}`
-                    : textPrompt
-            }
+            model: 'grok-imagine-video-1.5',
+            prompt: textPrompt,
+            image: {
+                url: dataUri
+            },
+            duration: grokDuration,
+            aspect_ratio: '16:9',
+            resolution: '720p'
         };
 
-        // Optional duration if supported by the model (ignored if not)
-        if (duration) body.duration = duration;
-
-        console.log('[VideoGen/Grok] Starting video generation…');
+        console.log('[VideoGen/Grok] Starting image-to-video…', {
+            model: body.model,
+            duration: body.duration,
+            aspect_ratio: body.aspect_ratio,
+            resolution: body.resolution,
+            promptLen: textPrompt.length,
+            imagePrefix: dataUri.substring(0, 40) + '…'
+        });
 
         const startResp = await fetch('/api/xai/videos/generations', {
             method: 'POST',
@@ -324,16 +359,21 @@
             body: JSON.stringify(body)
         });
 
-        if (!startResp.ok) {
-            const err = await startResp.json().catch(() => ({}));
-            const msg = err?.error?.message || err?.error || err?.message || `Grok video start failed: ${startResp.status}`;
-            throw new Error(msg);
+        const startText = await startResp.text();
+        let startData = {};
+        try {
+            startData = startText ? JSON.parse(startText) : {};
+        } catch {
+            startData = { raw: startText };
         }
 
-        const startData = await startResp.json();
+        if (!startResp.ok) {
+            console.error('[VideoGen/Grok] Start failed', startResp.status, startData);
+            throw new Error(formatApiError(startData, startResp.status));
+        }
+
         console.log('[VideoGen/Grok] Start response:', JSON.stringify(startData).substring(0, 400));
 
-        // Extract request id (several possible shapes)
         const requestId = startData.request_id
             || startData.id
             || startData.requestId
@@ -341,14 +381,12 @@
             || startData.data?.id
             || null;
 
-        // Sometimes the API returns the video immediately (rare)
         if (!requestId) {
             const immediate = await tryExtractGrokVideo(startData);
             if (immediate) return immediate;
-            throw new Error('No request_id in Grok video response');
+            throw new Error('No request_id in Grok video response: ' + JSON.stringify(startData).substring(0, 200));
         }
 
-        // Poll until done
         return pollGrokVideo(token, requestId);
     }
 
@@ -381,6 +419,7 @@
 
                 const data = await resp.json();
                 const status = (data.status || data.state || '').toLowerCase();
+                console.log('[VideoGen/Grok] Poll status:', status, data.progress != null ? `(${data.progress}%)` : '');
 
                 if (status === 'done' || status === 'completed' || status === 'succeeded' || status === 'success') {
                     const video = await tryExtractGrokVideo(data);
@@ -388,13 +427,17 @@
                     throw new Error('Grok reported done but no video URL/data found');
                 }
 
-                if (status === 'failed' || status === 'error' || status === 'cancelled') {
-                    throw new Error(data.error || data.message || `Grok video ${status}`);
+                if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'expired') {
+                    throw new Error(formatApiError(data, status) || `Grok video ${status}`);
                 }
-
-                // still pending / processing
             } catch (e) {
-                if (e.message && e.message.includes('Grok')) throw e;
+                // Re-throw hard failures; soft poll errors continue
+                if (e.message && (
+                    e.message.includes('Grok') ||
+                    e.message.includes('done but') ||
+                    e.message.includes('expired') ||
+                    e.message.includes('failed')
+                )) throw e;
                 console.warn('[VideoGen/Grok] Poll error:', e.message);
             }
         }
@@ -403,7 +446,6 @@
     }
 
     async function tryExtractGrokVideo(data) {
-        // Shape A: video.url (download)
         const url = data.video?.url
             || data.url
             || data.video_url
@@ -420,7 +462,6 @@
             return { blob, url: URL.createObjectURL(blob) };
         }
 
-        // Shape B: base64 video
         const b64 = data.video?.data
             || data.data?.b64
             || data.b64
@@ -445,25 +486,23 @@
         const grid = document.getElementById('vgResultsGrid');
         const section = document.getElementById('vgResultsSection');
 
-        // Revoke any old blob URLs from previous video elements
         grid.querySelectorAll('video').forEach(v => {
             if (v.src && v.src.startsWith('blob:')) {
                 v.pause();
                 v.removeAttribute('src');
-                v.load(); // Release the video resource
+                v.load();
             }
         });
 
         grid.innerHTML = '';
         section.classList.remove('hidden');
-        selectedVideos = new Set([0]); // Auto-select first
+        selectedVideos = new Set([0]);
 
         generatedVideos.forEach((video, idx) => {
             const card = document.createElement('div');
             card.className = 'result-card' + (idx === 0 ? ' selected' : '');
             card.dataset.idx = idx;
 
-            // Create video element properly (not via innerHTML) to ensure it loads
             const videoWrap = document.createElement('div');
             videoWrap.className = 'video-preview';
             const videoEl = document.createElement('video');
@@ -490,7 +529,6 @@
         });
     }
 
-    // Persistent event delegation for video results (only bound once)
     function bindVideoResultEvents() {
         const grid = document.getElementById('vgResultsGrid');
         if (!grid) return;
@@ -529,17 +567,12 @@
         });
     }
 
-    // ============================================
-    // HANDOFF
-    // ============================================
-
     function handoffToVideoPrep() {
         if (selectedVideos.size === 0) {
             showToast('Select at least one video first', 'warning');
             return;
         }
 
-        // Send the first selected video
         const idx = Array.from(selectedVideos)[0];
         const video = generatedVideos[idx];
 
@@ -551,18 +584,12 @@
         }
     }
 
-    // ============================================
-    // INITIALIZATION
-    // ============================================
-
     function initVideoGen() {
-        // Mode selector (Reference / Keyframe)
         initModeSelector('vgModeSelector', (mode) => {
             document.getElementById('vgReferenceMode')?.classList.toggle('hidden', mode !== 'reference');
             document.getElementById('vgKeyframeMode')?.classList.toggle('hidden', mode !== 'keyframe');
         });
 
-        // Provider selector (Gemini | Grok)
         const providerEl = document.getElementById('vgProvider');
         if (providerEl) {
             providerEl.querySelectorAll('.mode-btn').forEach(b => {
@@ -580,21 +607,17 @@
         }
         updateGenerateButtonLabel();
 
-        // Upload zone
         initUploadZone('vgUploadZone', 'vgFileInput', (files) => {
             loadReferenceFiles(files);
         });
 
-        // Keyframe uploads
         initUploadZone('vgStartFrameZone', 'vgStartFrameInput', (files) => {
             if (files[0]) {
                 const reader = new FileReader();
                 reader.onload = (e) => {
-                    // Ensure start frame is first in array
                     if (referenceImages.length === 0) referenceImages.push({});
                     referenceImages[0] = { dataUrl: e.target.result };
 
-                    // Show preview
                     const preview = document.getElementById('vgStartFramePreview');
                     if (preview) {
                         preview.src = e.target.result;
@@ -617,7 +640,6 @@
                     if (referenceImages.length < 2) referenceImages.push({});
                     referenceImages[1] = { dataUrl: e.target.result };
 
-                    // Show preview
                     const preview = document.getElementById('vgEndFramePreview');
                     if (preview) {
                         preview.src = e.target.result;
@@ -633,28 +655,18 @@
             }
         });
 
-        // Duration slider
         initRange('vgDuration', 'vgDurationVal', 's');
-
-        // Generation count
         initGenCount('vgGenCount');
 
-        // Generate button
         document.getElementById('vgGenerateBtn')?.addEventListener('click', generateVideo);
-
-        // Cancel button
         document.getElementById('vgCancelBtn')?.addEventListener('click', () => {
             cancelled = true;
             showToast('Generation cancelled', 'warning');
         });
-
-        // Handoff button
         document.getElementById('vgHandoffBtn')?.addEventListener('click', handoffToVideoPrep);
 
-        // Bind video result events once (persistent delegation)
         bindVideoResultEvents();
 
-        // Check for handoff from Sprite Prep when tab becomes active
         const observer = new MutationObserver((mutations) => {
             for (const m of mutations) {
                 if (m.target.classList.contains('active') && m.target.id === 'tab-video-gen') {
@@ -682,7 +694,6 @@
         }
     }
 
-    // Init on DOM ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initVideoGen);
     } else {
