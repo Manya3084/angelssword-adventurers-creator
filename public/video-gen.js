@@ -9,20 +9,13 @@
 (function() {
     'use strict';
 
-    // ============================================
-    // STATE
-    // ============================================
     let generating = false;
     let cancelled = false;
-    let referenceImages = []; // Array of { dataUrl }
-    let generatedVideos = [];  // Array of { blob, url }
+    let referenceImages = [];
+    let generatedVideos = [];
     let selectedVideos = new Set();
     let fromSpritePrep = false;
-    let aiProvider = localStorage.getItem('vg_ai_provider') || 'gemini'; // 'gemini' | 'grok'
-
-    // ============================================
-    // REFERENCE IMAGE HANDLING
-    // ============================================
+    let aiProvider = localStorage.getItem('vg_ai_provider') || 'gemini';
 
     function loadReferenceFromHandoff() {
         const handoff = window.ASAdventurer.handoff;
@@ -43,7 +36,6 @@
     function loadReferenceFiles(files) {
         referenceImages = [];
         fromSpritePrep = false;
-
         document.getElementById('vgRefFromSprite')?.classList.add('hidden');
 
         const maxFiles = Math.min(files.length, 3);
@@ -54,7 +46,6 @@
             reader.onload = (e) => {
                 referenceImages.push({ dataUrl: e.target.result });
                 loaded++;
-
                 if (loaded === maxFiles) {
                     const preview = document.getElementById('vgRefImagePreview');
                     const img = document.getElementById('vgRefImage');
@@ -66,10 +57,6 @@
             reader.readAsDataURL(files[i]);
         }
     }
-
-    // ============================================
-    // VIDEO GENERATION
-    // ============================================
 
     function getSelectedProvider() {
         const container = document.getElementById('vgProvider');
@@ -176,7 +163,6 @@
         }
     }
 
-    // ---------- Gemini path ----------
     async function generateOneGeminiVideo(apiKey, prompt, duration, mode) {
         const textPrompt = prompt || 'Generate a gentle breathing idle animation with slight body sway. Keep the character on the same background.';
 
@@ -228,8 +214,6 @@
         }
 
         const data = await response.json();
-        console.log('[VideoGen/Gemini] Response:', JSON.stringify(data).substring(0, 500));
-
         return extractVideoFromGeminiResponse(data);
     }
 
@@ -265,35 +249,18 @@
             return extractVideoFromGeminiResponse(data.result);
         }
 
-        console.warn('[VideoGen] Could not extract video from Gemini response:', JSON.stringify(data).substring(0, 1000));
         throw new Error('No video data found in Gemini response. Check the console for details.');
     }
-
-    // ---------- Grok Imagine path ----------
-    // Docs: https://docs.x.ai/developers/model-capabilities/video/image-to-video
-    // POST /v1/videos/generations
-    // {
-    //   model: "grok-imagine-video-1.5",
-    //   prompt: "motion description string",
-    //   image: { url: "data:image/png;base64,..." },  // or public URL
-    //   duration: 5-15,
-    //   aspect_ratio: "16:9",
-    //   resolution: "720p"
-    // }
-    // → { request_id }
-    // poll GET /v1/videos/{request_id} until status === "done" → video.url
 
     function toDataUri(dataUrl) {
         if (!dataUrl) return null;
         if (dataUrl.startsWith('data:')) return dataUrl;
-        // assume raw base64 PNG
         return `data:image/png;base64,${dataUrl}`;
     }
 
     function formatApiError(err, status) {
-        if (!err) return `Grok video start failed: ${status}`;
+        if (!err) return `Grok video error: ${status}`;
         if (typeof err === 'string') return err;
-        // xAI often returns { error: { message, code, type } } or { message }
         const nested = err.error;
         if (typeof nested === 'string') return nested;
         if (nested?.message) {
@@ -304,7 +271,7 @@
         try {
             return JSON.stringify(err).substring(0, 300);
         } catch {
-            return `Grok video start failed: ${status}`;
+            return `Grok video error: ${status}`;
         }
     }
 
@@ -324,18 +291,14 @@
 
         const dataUri = toDataUri(ref.dataUrl);
 
-        // Clamp duration to typical Grok Imagine range (docs: ~5–15s; examples use 6, 10, 12)
         let grokDuration = parseInt(duration, 10) || 5;
         if (grokDuration < 1) grokDuration = 5;
         if (grokDuration > 15) grokDuration = 15;
 
-        // Official image-to-video shape
         const body = {
             model: 'grok-imagine-video-1.5',
             prompt: textPrompt,
-            image: {
-                url: dataUri
-            },
+            image: { url: dataUri },
             duration: grokDuration,
             aspect_ratio: '16:9',
             resolution: '720p'
@@ -344,10 +307,7 @@
         console.log('[VideoGen/Grok] Starting image-to-video…', {
             model: body.model,
             duration: body.duration,
-            aspect_ratio: body.aspect_ratio,
-            resolution: body.resolution,
-            promptLen: textPrompt.length,
-            imagePrefix: dataUri.substring(0, 40) + '…'
+            promptLen: textPrompt.length
         });
 
         const startResp = await fetch('/api/xai/videos/generations', {
@@ -374,6 +334,10 @@
 
         console.log('[VideoGen/Grok] Start response:', JSON.stringify(startData).substring(0, 400));
 
+        // Immediate complete (rare)
+        const immediate = await tryExtractGrokVideo(token, startData);
+        if (immediate) return immediate;
+
         const requestId = startData.request_id
             || startData.id
             || startData.requestId
@@ -382,8 +346,6 @@
             || null;
 
         if (!requestId) {
-            const immediate = await tryExtractGrokVideo(startData);
-            if (immediate) return immediate;
             throw new Error('No request_id in Grok video response: ' + JSON.stringify(startData).substring(0, 200));
         }
 
@@ -391,13 +353,22 @@
     }
 
     async function pollGrokVideo(token, requestId) {
-        const maxAttempts = 120; // ~10 min at 5s
+        const maxAttempts = 90; // ~7.5 min at 5s
         const pollInterval = 5000;
+        let consecutive403 = 0;
+        let lastBody = null;
 
         for (let i = 0; i < maxAttempts; i++) {
             if (cancelled) return null;
 
             await new Promise(r => setTimeout(r, pollInterval));
+
+            // Refresh token periodically in case long job
+            let authToken = token;
+            try {
+                const fresh = await window.XaiOAuth.getAccessToken();
+                if (fresh) authToken = fresh;
+            } catch (_) {}
 
             const fillEl = document.getElementById('vgProgressFill');
             const textEl = document.getElementById('vgProgressText');
@@ -407,46 +378,117 @@
             try {
                 const resp = await fetch(`/api/xai/videos/${encodeURIComponent(requestId)}`, {
                     method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    headers: { 'Authorization': `Bearer ${authToken}` }
                 });
 
-                if (!resp.ok) {
-                    console.warn('[VideoGen/Grok] Poll HTTP', resp.status);
+                const text = await resp.text();
+                let data = {};
+                try {
+                    data = text ? JSON.parse(text) : {};
+                } catch {
+                    data = { raw: text };
+                }
+                lastBody = data;
+
+                // HTTP 202 = still processing (async accepted)
+                if (resp.status === 202) {
+                    consecutive403 = 0;
+                    console.log('[VideoGen/Grok] pending (202)', data.progress != null ? data.progress + '%' : '');
                     continue;
                 }
 
-                const data = await resp.json();
-                const status = (data.status || data.state || '').toLowerCase();
-                console.log('[VideoGen/Grok] Poll status:', status, data.progress != null ? `(${data.progress}%)` : '');
+                // Rate limit / forbidden — backoff, then hard fail
+                if (resp.status === 403 || resp.status === 429) {
+                    consecutive403++;
+                    console.warn('[VideoGen/Grok] Poll', resp.status, 'count=', consecutive403, data);
 
-                if (status === 'done' || status === 'completed' || status === 'succeeded' || status === 'success') {
-                    const video = await tryExtractGrokVideo(data);
+                    // If we previously saw a video URL in a 200 body, try extract from last good body
+                    if (lastBody) {
+                        const maybe = await tryExtractGrokVideo(authToken, lastBody);
+                        if (maybe) return maybe;
+                    }
+
+                    if (consecutive403 >= 5) {
+                        throw new Error(
+                            'Grok poll returned 403/429 repeatedly (rate limit or expired job). ' +
+                            'Try generating 1 video at a time, wait a minute, then retry. ' +
+                            formatApiError(data, resp.status)
+                        );
+                    }
+                    // exponential-ish backoff
+                    await new Promise(r => setTimeout(r, 3000 * consecutive403));
+                    continue;
+                }
+
+                if (resp.status === 401) {
+                    throw new Error('Grok auth expired during poll — re-login in Settings');
+                }
+
+                if (!resp.ok && resp.status !== 200) {
+                    console.warn('[VideoGen/Grok] Poll HTTP', resp.status, data);
+                    // keep going for transient 5xx
+                    if (resp.status >= 500) continue;
+                    throw new Error(formatApiError(data, resp.status));
+                }
+
+                consecutive403 = 0;
+
+                const st = String(data.status || data.state || '').toLowerCase();
+                console.log('[VideoGen/Grok] Poll', resp.status, 'status=', st || '(none)', data.progress != null ? data.progress + '%' : '');
+
+                // Done if status says so OR video URL is present
+                const hasUrl = !!(data.video?.url || data.url || data.video_url);
+                if (
+                    st === 'done' || st === 'completed' || st === 'succeeded' || st === 'success' ||
+                    hasUrl
+                ) {
+                    const video = await tryExtractGrokVideo(authToken, data);
                     if (video) return video;
-                    throw new Error('Grok reported done but no video URL/data found');
+                    if (hasUrl) {
+                        throw new Error('Grok returned a video URL but download failed — see console');
+                    }
                 }
 
-                if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'expired') {
-                    throw new Error(formatApiError(data, status) || `Grok video ${status}`);
+                if (st === 'failed' || st === 'error' || st === 'cancelled' || st === 'expired') {
+                    throw new Error(formatApiError(data, st));
                 }
+
+                // pending / processing / empty status → continue
             } catch (e) {
-                // Re-throw hard failures; soft poll errors continue
-                if (e.message && (
-                    e.message.includes('Grok') ||
-                    e.message.includes('done but') ||
-                    e.message.includes('expired') ||
-                    e.message.includes('failed')
-                )) throw e;
-                console.warn('[VideoGen/Grok] Poll error:', e.message);
+                // Hard errors rethrow
+                if (
+                    e.message && (
+                        e.message.includes('Grok') ||
+                        e.message.includes('auth') ||
+                        e.message.includes('download failed') ||
+                        e.message.includes('expired') ||
+                        e.message.includes('rate limit') ||
+                        e.message.includes('403')
+                    )
+                ) {
+                    throw e;
+                }
+                console.warn('[VideoGen/Grok] Poll soft error:', e.message);
             }
         }
 
-        throw new Error('Grok video generation timed out after ~10 minutes');
+        // Last chance extract
+        if (lastBody) {
+            const token2 = await window.XaiOAuth.getAccessToken();
+            const maybe = await tryExtractGrokVideo(token2 || token, lastBody);
+            if (maybe) return maybe;
+        }
+
+        throw new Error('Grok video generation timed out after ~7–8 minutes');
     }
 
-    async function tryExtractGrokVideo(data) {
-        const url = data.video?.url
+    /**
+     * Extract video from poll payload. Downloads remote URL via local proxy (CORS-safe).
+     */
+    async function tryExtractGrokVideo(token, data) {
+        if (!data || typeof data !== 'object') return null;
+
+        const remoteUrl = data.video?.url
             || data.url
             || data.video_url
             || data.data?.video?.url
@@ -454,11 +496,27 @@
             || data.result?.video?.url
             || null;
 
-        if (url) {
-            console.log('[VideoGen/Grok] Downloading video from', url.substring(0, 80));
-            const resp = await fetch(url);
-            if (!resp.ok) throw new Error(`Failed to download Grok video: ${resp.status}`);
+        if (remoteUrl) {
+            console.log('[VideoGen/Grok] Downloading via proxy:', remoteUrl.substring(0, 90));
+            const resp = await fetch('/api/xai/video-fetch', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ url: remoteUrl })
+            });
+
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.error || err.detail || `Grok video download failed: ${resp.status}`);
+            }
+
             const blob = await resp.blob();
+            if (!blob || blob.size < 1000) {
+                throw new Error('Grok video download returned empty/tiny file');
+            }
+            console.log('[VideoGen/Grok] ✅ got blob', (blob.size / 1024 / 1024).toFixed(2), 'MB');
             return { blob, url: URL.createObjectURL(blob) };
         }
 
@@ -477,10 +535,6 @@
 
         return null;
     }
-
-    // ============================================
-    // RESULTS DISPLAY
-    // ============================================
 
     function displayVideoResults() {
         const grid = document.getElementById('vgResultsGrid');
@@ -516,9 +570,9 @@
             const actions = document.createElement('div');
             actions.className = 'card-actions';
             actions.innerHTML = `
-                <button class="btn btn-sm btn-secondary" data-action="play" data-idx="${idx}" title="Play/pause this video">▶️ Play</button>
-                <button class="btn btn-sm btn-secondary" data-action="download" data-idx="${idx}" title="Download this video">💾 Save</button>
-                <button class="btn btn-sm ${selectedVideos.has(idx) ? 'btn-primary' : 'btn-secondary'}" data-action="select" data-idx="${idx}" title="Select this video for the pipeline">
+                <button class="btn btn-sm btn-secondary" data-action="play" data-idx="${idx}" title="Play/pause">▶️ Play</button>
+                <button class="btn btn-sm btn-secondary" data-action="download" data-idx="${idx}" title="Download">💾 Save</button>
+                <button class="btn btn-sm ${selectedVideos.has(idx) ? 'btn-primary' : 'btn-secondary'}" data-action="select" data-idx="${idx}">
                     ${selectedVideos.has(idx) ? '✓ Selected' : '○ Select'}
                 </button>
             `;
@@ -607,9 +661,7 @@
         }
         updateGenerateButtonLabel();
 
-        initUploadZone('vgUploadZone', 'vgFileInput', (files) => {
-            loadReferenceFiles(files);
-        });
+        initUploadZone('vgUploadZone', 'vgFileInput', (files) => loadReferenceFiles(files));
 
         initUploadZone('vgStartFrameZone', 'vgStartFrameInput', (files) => {
             if (files[0]) {
@@ -617,7 +669,6 @@
                 reader.onload = (e) => {
                     if (referenceImages.length === 0) referenceImages.push({});
                     referenceImages[0] = { dataUrl: e.target.result };
-
                     const preview = document.getElementById('vgStartFramePreview');
                     if (preview) {
                         preview.src = e.target.result;
@@ -639,7 +690,6 @@
                 reader.onload = (e) => {
                     if (referenceImages.length < 2) referenceImages.push({});
                     referenceImages[1] = { dataUrl: e.target.result };
-
                     const preview = document.getElementById('vgEndFramePreview');
                     if (preview) {
                         preview.src = e.target.result;
@@ -676,9 +726,7 @@
         });
 
         const panel = document.getElementById('tab-video-gen');
-        if (panel) {
-            observer.observe(panel, { attributes: true, attributeFilter: ['class'] });
-        }
+        if (panel) observer.observe(panel, { attributes: true, attributeFilter: ['class'] });
     }
 
     function updateGenerateButtonLabel() {
