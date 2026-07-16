@@ -1,41 +1,47 @@
 # Grok SuperGrok OAuth + Imagine Integration
 
-## Status (feature/grok-oauth-imagine branch) — COMPLETE ✅
+## Status — COMPLETE ✅
 
-### ✅ Done
+### Server
+- Device-code OAuth + token refresh (`/api/xai/oauth/device`, `/api/xai/oauth/token`)
+- Image: `POST /api/xai/images/generations`
+- Video start: `POST /api/xai/videos/generations`
+- Video poll: `GET /api/xai/videos/:requestId`
+- Test: `POST /api/xai/test`
 
-**Server**
-- Device-code OAuth + token refresh proxies (`/api/xai/oauth/device`, `/api/xai/oauth/token`)
-- Grok Imagine image proxy (`/api/xai/images/generations`)
-- Grok Imagine video start + poll (`/api/xai/videos/generations`, `GET /api/xai/videos/:requestId`)
-- Token test (`/api/xai/test`)
+### Client
+- `public/xai-oauth.js`
+- Settings SuperGrok login UI
+- Sprite Prep: OpenAI | Grok
+- Video Gen: Gemini | Grok
 
-**Client**
-- `public/xai-oauth.js` — device-code manager, refresh, localStorage
-- Settings panel: Login with SuperGrok, device code UI, status, Test / Refresh / Logout
-- Sprite Prep: **OpenAI | Grok** provider selector (`#sgProvider`, persisted as `sg_ai_provider`)
-- Video Gen: **Gemini | Grok** provider selector (`#vgProvider`, persisted as `vg_ai_provider`)
-- Generation logic fully wired for both providers
-- Button labels update with selected provider
+## Correct video payload (image-to-video)
 
-## User flow
-1. Open **Settings** → **Login with SuperGrok**
-2. Browser opens auth.x.ai device verification
-3. Approve with SuperGrok / X Premium+ account
-4. Token stored in localStorage under `xai_oauth_tokens`
-5. In Sprite Prep → AI Generate → select **✨ Grok** → Generate Sprite
-6. In Generate Video → select **✨ Grok** → Generate Video
+Docs: https://docs.x.ai/developers/model-capabilities/video/image-to-video
 
-## Models
-- Image: `grok-imagine-image-quality`
-- Video: `grok-imagine-video`
-
-## Payloads (high level)
-
-### Image
 ```js
-POST /api/xai/images/generations
-Authorization: Bearer <access_token>
+// POST https://api.x.ai/v1/videos/generations
+{
+  model: "grok-imagine-video-1.5",
+  prompt: "Gentle breathing idle… static camera…",  // STRING, not object
+  image: {
+    url: "data:image/png;base64,..."   // data URI or public URL
+    // alternatives: data_uri, file_id
+  },
+  duration: 5,           // seconds (typical 1–15)
+  aspect_ratio: "16:9",
+  resolution: "720p"
+}
+// → { request_id: "..." }
+// poll GET /v1/videos/{request_id} until status === "done"
+// → { status: "done", video: { url: "https://...mp4" } }
+```
+
+**422 root cause (fixed):** we previously sent `prompt: { image, text }` which is invalid.
+
+## Image payload
+
+```js
 {
   model: "grok-imagine-image-quality",
   prompt: "...chroma-key sprite prompt...",
@@ -46,19 +52,10 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### Video
-```js
-POST /api/xai/videos/generations
-{
-  model: "grok-imagine-video",
-  prompt: { image: "<base64>", text: "animation prompt" },
-  duration: 5  // optional
-}
-// then poll GET /api/xai/videos/{request_id} until status done
-// download video.url or use base64 if present
-```
+## User flow
+1. Settings → Login with SuperGrok
+2. Sprite Prep → AI Generate → ✨ Grok
+3. Generate Video → ✨ Grok
 
 ## Security
-Tokens only go to `auth.x.ai` and `api.x.ai` via the local Node proxy. Never leave the machine otherwise.
-
-⚔️ Ready for testing.
+Tokens only touch `auth.x.ai` / `api.x.ai` via the local proxy.
