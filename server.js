@@ -1,7 +1,7 @@
 /**
  * ⚔️ AS Adventurer — Local Server + API Proxy
  * Angel's Sword Studios
- * 
+ *
  * Serves static files from public/ and proxies API requests
  * to OpenAI, Google Gemini, and xAI Grok (via SuperGrok OAuth or API key)
  * to avoid CORS issues and protect API keys / OAuth tokens.
@@ -32,18 +32,12 @@ app.use((req, res, next) => {
 });
 
 // Static files
-// Detect pkg-compiled exe vs normal Node.js
 const APP_DIR = process.pkg ? path.dirname(process.execPath) : __dirname;
 
 app.use(express.static(path.join(APP_DIR, 'public')));
 
 // --- API Proxy Routes ---
 
-/**
- * POST /api/generate
- * Proxies to OpenAI Image Generations (text-only, no reference images)
- * Body: { model, prompt, n, size, quality }
- */
 app.post('/api/generate', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) {
@@ -71,16 +65,6 @@ app.post('/api/generate', async (req, res) => {
     }
 });
 
-/**
- * POST /api/edits
- * Proxies to OpenAI Image Edits (with reference images)
- * Converts JSON body { model, prompt, images[], n, size, quality }
- * into multipart/form-data as required by OpenAI API.
- * 
- * Images can be:
- *   - Raw base64 strings
- *   - Objects { label: "character_reference", data: "base64..." }
- */
 app.post('/api/edits', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) {
@@ -98,22 +82,18 @@ app.post('/api/edits', async (req, res) => {
         if (size) form.append('size', size);
         if (quality) form.append('quality', quality);
 
-        // Add images as file fields
         if (images && Array.isArray(images)) {
             images.forEach((imgEntry, index) => {
                 let raw, fileName;
 
                 if (typeof imgEntry === 'object' && imgEntry.data) {
-                    // Labeled image: { label: "character_reference", data: "base64..." }
                     raw = imgEntry.data;
                     fileName = `${imgEntry.label || 'ref' + index}.png`;
                 } else {
-                    // Raw base64 string
                     raw = String(imgEntry);
                     fileName = `ref${index}.png`;
                 }
 
-                // Strip data URI prefix if present
                 if (raw.includes(',')) {
                     raw = raw.substring(raw.indexOf(',') + 1);
                 }
@@ -146,11 +126,6 @@ app.post('/api/edits', async (req, res) => {
     }
 });
 
-/**
- * POST /api/chat
- * Proxies to OpenAI Chat Completions (used for test connection)
- * Body: Standard OpenAI chat completion body
- */
 app.post('/api/chat', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) {
@@ -178,12 +153,6 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-/**
- * POST /api/video/generate
- * Proxies to Google Gemini Omni Flash Interactions API
- * Body: Standard Gemini interactions body with model, contents, generationConfig
- * Expects Google API key in query param or body
- */
 app.post('/api/video/generate', async (req, res) => {
     const apiKey = req.headers['x-api-key'] || req.query.key;
     if (!apiKey) {
@@ -192,8 +161,7 @@ app.post('/api/video/generate', async (req, res) => {
 
     try {
         console.log('  [PROXY] POST /api/video/generate → Gemini Interactions API');
-        
-        // Log the request body (redact image data for readability)
+
         const logBody = { ...req.body };
         if (logBody.input_image) {
             logBody.input_image = { mime_type: logBody.input_image.mime_type, data: `[${logBody.input_image.data?.length || 0} chars base64]` };
@@ -209,13 +177,12 @@ app.post('/api/video/generate', async (req, res) => {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(req.body),
-            timeout: 600000 // 10 min timeout for video generation
+            timeout: 600000
         });
 
         const data = await response.text();
         console.log(`  [PROXY] Gemini Interactions → HTTP ${response.status}`);
-        
-        // Log response details
+
         if (response.status !== 200) {
             console.error('  [ERROR] Gemini API error response:');
             console.error('  ', data.substring(0, 500));
@@ -232,10 +199,6 @@ app.post('/api/video/generate', async (req, res) => {
     }
 });
 
-/**
- * POST /api/video/poll
- * Polls a Gemini Interactions operation for completion
- */
 app.post('/api/video/poll', async (req, res) => {
     const apiKey = req.headers['x-api-key'] || req.query.key;
     if (!apiKey) {
@@ -258,7 +221,7 @@ app.post('/api/video/poll', async (req, res) => {
     }
 });
 
-// --- xAI / Grok OAuth + Imagine Proxy (SuperGrok OAuth support) ---
+// --- xAI / Grok OAuth + Imagine Proxy ---
 
 const XAI_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
 const XAI_SCOPE = 'openid profile email offline_access grok-cli:access api:access';
@@ -266,10 +229,6 @@ const XAI_DEVICE_CODE_URL = 'https://auth.x.ai/oauth2/device/code';
 const XAI_TOKEN_URL = 'https://auth.x.ai/oauth2/token';
 const XAI_API_BASE = 'https://api.x.ai/v1';
 
-/**
- * POST /api/xai/oauth/device
- * Request a device code for SuperGrok OAuth login.
- */
 app.post('/api/xai/oauth/device', async (req, res) => {
     try {
         console.log('  [XAI] Requesting device code...');
@@ -296,10 +255,6 @@ app.post('/api/xai/oauth/device', async (req, res) => {
     }
 });
 
-/**
- * POST /api/xai/oauth/token
- * Exchange device_code or refresh_token for access tokens.
- */
 app.post('/api/xai/oauth/token', async (req, res) => {
     try {
         console.log('  [XAI] Token exchange...', req.body.grant_type);
@@ -327,10 +282,6 @@ app.post('/api/xai/oauth/token', async (req, res) => {
     }
 });
 
-/**
- * POST /api/xai/images/generations
- * Proxy to Grok Imagine image generation
- */
 app.post('/api/xai/images/generations', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) {
@@ -357,10 +308,6 @@ app.post('/api/xai/images/generations', async (req, res) => {
     }
 });
 
-/**
- * POST /api/xai/videos/generations
- * Start Grok Imagine video generation (async)
- */
 app.post('/api/xai/videos/generations', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) {
@@ -370,10 +317,17 @@ app.post('/api/xai/videos/generations', async (req, res) => {
     try {
         console.log('  [XAI] POST /videos/generations → Grok Imagine Video');
         const logBody = { ...req.body };
-        if (logBody.prompt && typeof logBody.prompt === 'object' && logBody.prompt.image) {
-            logBody.prompt = { ...logBody.prompt, image: `[base64 ${String(logBody.prompt.image).length} chars]` };
+        if (logBody.image) {
+            const img = logBody.image;
+            if (typeof img === 'object') {
+                logBody.image = {
+                    ...img,
+                    url: img.url ? `[data uri/url ${String(img.url).length} chars]` : img.url,
+                    data_uri: img.data_uri ? `[${String(img.data_uri).length} chars]` : img.data_uri
+                };
+            }
         }
-        console.log('  [XAI] Request:', JSON.stringify(logBody).substring(0, 400));
+        console.log('  [XAI] Request:', JSON.stringify(logBody).substring(0, 500));
 
         const response = await fetch(`${XAI_API_BASE}/videos/generations`, {
             method: 'POST',
@@ -382,10 +336,15 @@ app.post('/api/xai/videos/generations', async (req, res) => {
                 'Authorization': authHeader
             },
             body: JSON.stringify(req.body),
-            timeout: 60000
+            timeout: 120000
         });
         const data = await response.text();
         console.log(`  [XAI] /videos/generations → ${response.status}`);
+        if (response.status >= 400) {
+            console.error('  [XAI] error body:', data.substring(0, 400));
+        } else {
+            console.log('  [XAI] start body:', data.substring(0, 200));
+        }
         res.status(response.status).type('application/json').send(data);
     } catch (err) {
         console.error('  [ERROR] XAI video start failed:', err.message);
@@ -395,7 +354,7 @@ app.post('/api/xai/videos/generations', async (req, res) => {
 
 /**
  * GET /api/xai/videos/:requestId
- * Poll video generation status
+ * Poll video generation status (forwards HTTP status + JSON body)
  */
 app.get('/api/xai/videos/:requestId', async (req, res) => {
     const authHeader = req.headers['authorization'];
@@ -411,10 +370,30 @@ app.get('/api/xai/videos/:requestId', async (req, res) => {
             headers: {
                 'Authorization': authHeader
             },
-            timeout: 30000
+            timeout: 60000
         });
         const data = await response.text();
         console.log(`  [XAI] video status → ${response.status}`);
+
+        // Helpful debug: log short body for 200/202
+        if (response.status === 200 || response.status === 202) {
+            try {
+                const j = JSON.parse(data);
+                const snippet = {
+                    status: j.status,
+                    progress: j.progress,
+                    hasVideoUrl: !!(j.video && j.video.url),
+                    model: j.model,
+                    error: j.error || j.message
+                };
+                console.log('  [XAI] poll body:', JSON.stringify(snippet));
+            } catch {
+                console.log('  [XAI] poll body (raw):', data.substring(0, 200));
+            }
+        } else if (response.status >= 400) {
+            console.error('  [XAI] poll error body:', data.substring(0, 300));
+        }
+
         res.status(response.status).type('application/json').send(data);
     } catch (err) {
         console.error('  [ERROR] XAI video poll failed:', err.message);
@@ -422,7 +401,79 @@ app.get('/api/xai/videos/:requestId', async (req, res) => {
     }
 });
 
-// Test connection for OAuth token
+/**
+ * POST /api/xai/video-fetch
+ * Download a completed Grok video URL server-side (avoids browser CORS on vidgen.x.ai)
+ * Body: { url: "https://vidgen.x.ai/..." }
+ * Returns: raw video bytes with correct content-type
+ */
+app.post('/api/xai/video-fetch', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    // Auth optional for public CDN URLs, but require it so only logged-in clients can use proxy
+    if (!authHeader) {
+        return res.status(401).json({ error: 'No Authorization header provided' });
+    }
+
+    try {
+        const { url } = req.body || {};
+        if (!url || typeof url !== 'string') {
+            return res.status(400).json({ error: 'Missing url' });
+        }
+
+        // Only allow xAI video CDN hosts
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch {
+            return res.status(400).json({ error: 'Invalid url' });
+        }
+
+        const allowedHosts = [
+            'vidgen.x.ai',
+            'api.x.ai',
+            'cdn.x.ai',
+            'imagine.x.ai'
+        ];
+        const hostOk = allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h));
+        if (!hostOk) {
+            console.error('  [XAI] video-fetch blocked host:', parsed.hostname);
+            return res.status(400).json({ error: `Blocked download host: ${parsed.hostname}` });
+        }
+
+        console.log('  [XAI] video-fetch →', url.substring(0, 100));
+        const response = await fetch(url, {
+            method: 'GET',
+            timeout: 300000,
+            headers: {
+                // Some CDNs accept bearer; harmless if ignored
+                'Authorization': authHeader
+            }
+        });
+
+        if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            console.error('  [XAI] video-fetch failed', response.status, errText.substring(0, 200));
+            return res.status(response.status).json({
+                error: `Video download failed: ${response.status}`,
+                detail: errText.substring(0, 300)
+            });
+        }
+
+        const contentType = response.headers.get('content-type') || 'video/mp4';
+        const buf = await response.buffer();
+        console.log(`  [XAI] video-fetch ✅ ${(buf.length / 1024 / 1024).toFixed(2)} MB (${contentType})`);
+
+        res.status(200);
+        res.set('Content-Type', contentType);
+        res.set('Content-Length', String(buf.length));
+        res.set('Cache-Control', 'no-store');
+        res.send(buf);
+    } catch (err) {
+        console.error('  [ERROR] XAI video-fetch failed:', err.message);
+        res.status(502).json({ error: `Proxy error: ${err.message}` });
+    }
+});
+
 app.post('/api/xai/test', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) {
@@ -448,7 +499,6 @@ app.listen(PORT, () => {
     console.log('  Press Ctrl+C to stop');
     console.log('');
 
-    // Auto-open browser
     const url = `http://localhost:${PORT}`;
     const start = process.platform === 'win32' ? 'start' :
                   process.platform === 'darwin' ? 'open' : 'xdg-open';
