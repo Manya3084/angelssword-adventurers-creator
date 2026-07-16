@@ -3,7 +3,8 @@
  * Angel's Sword Studios
  * 
  * Serves static files from public/ and proxies API requests
- * to OpenAI and Google Gemini to avoid CORS issues and protect API keys.
+ * to OpenAI, Google Gemini, and xAI Grok (via SuperGrok OAuth or API key)
+ * to avoid CORS issues and protect API keys / OAuth tokens.
  */
 
 const express = require('express');
@@ -23,7 +24,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key');
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
     }
@@ -254,6 +255,187 @@ app.post('/api/video/poll', async (req, res) => {
     } catch (err) {
         console.error('  [ERROR] Video poll failed:', err.message);
         res.status(502).json({ error: `Proxy error: ${err.message}` });
+    }
+});
+
+// --- xAI / Grok OAuth + Imagine Proxy (SuperGrok OAuth support) ---
+
+const XAI_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
+const XAI_SCOPE = 'openid profile email offline_access grok-cli:access api:access';
+const XAI_DEVICE_CODE_URL = 'https://auth.x.ai/oauth2/device/code';
+const XAI_TOKEN_URL = 'https://auth.x.ai/oauth2/token';
+const XAI_API_BASE = 'https://api.x.ai/v1';
+
+/**
+ * POST /api/xai/oauth/device
+ * Request a device code for SuperGrok OAuth login.
+ */
+app.post('/api/xai/oauth/device', async (req, res) => {
+    try {
+        console.log('  [XAI] Requesting device code...');
+        const body = new URLSearchParams({
+            client_id: XAI_CLIENT_ID,
+            scope: XAI_SCOPE,
+            referrer: 'as-adventurer'
+        });
+        const response = await fetch(XAI_DEVICE_CODE_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'x-grok-client-version': '1.0.0',
+                'x-grok-client-surface': 'cli'
+            },
+            body: body.toString()
+        });
+        const data = await response.text();
+        console.log(`  [XAI] Device code → ${response.status}`);
+        res.status(response.status).type('application/json').send(data);
+    } catch (err) {
+        console.error('  [ERROR] XAI device code failed:', err.message);
+        res.status(502).json({ error: `Proxy error: ${err.message}` });
+    }
+});
+
+/**
+ * POST /api/xai/oauth/token
+ * Exchange device_code or refresh_token for access tokens.
+ */
+app.post('/api/xai/oauth/token', async (req, res) => {
+    try {
+        console.log('  [XAI] Token exchange...', req.body.grant_type);
+        const params = new URLSearchParams({
+            client_id: XAI_CLIENT_ID,
+            ...req.body
+        });
+        if (!params.has('client_id')) params.set('client_id', XAI_CLIENT_ID);
+
+        const response = await fetch(XAI_TOKEN_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'x-grok-client-version': '1.0.0',
+                'x-grok-client-surface': 'cli'
+            },
+            body: params.toString()
+        });
+        const data = await response.text();
+        console.log(`  [XAI] Token → ${response.status}`);
+        res.status(response.status).type('application/json').send(data);
+    } catch (err) {
+        console.error('  [ERROR] XAI token failed:', err.message);
+        res.status(502).json({ error: `Proxy error: ${err.message}` });
+    }
+});
+
+/**
+ * POST /api/xai/images/generations
+ * Proxy to Grok Imagine image generation
+ */
+app.post('/api/xai/images/generations', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+        return res.status(401).json({ error: 'No Authorization header provided' });
+    }
+
+    try {
+        console.log('  [XAI] POST /images/generations → Grok Imagine');
+        const response = await fetch(`${XAI_API_BASE}/images/generations`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': authHeader
+            },
+            body: JSON.stringify(req.body),
+            timeout: 300000
+        });
+        const data = await response.text();
+        console.log(`  [XAI] /images/generations → ${response.status}`);
+        res.status(response.status).type('application/json').send(data);
+    } catch (err) {
+        console.error('  [ERROR] XAI image gen failed:', err.message);
+        res.status(502).json({ error: `Proxy error: ${err.message}` });
+    }
+});
+
+/**
+ * POST /api/xai/videos/generations
+ * Start Grok Imagine video generation (async)
+ */
+app.post('/api/xai/videos/generations', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+        return res.status(401).json({ error: 'No Authorization header provided' });
+    }
+
+    try {
+        console.log('  [XAI] POST /videos/generations → Grok Imagine Video');
+        const logBody = { ...req.body };
+        if (logBody.prompt && typeof logBody.prompt === 'object' && logBody.prompt.image) {
+            logBody.prompt = { ...logBody.prompt, image: `[base64 ${String(logBody.prompt.image).length} chars]` };
+        }
+        console.log('  [XAI] Request:', JSON.stringify(logBody).substring(0, 400));
+
+        const response = await fetch(`${XAI_API_BASE}/videos/generations`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': authHeader
+            },
+            body: JSON.stringify(req.body),
+            timeout: 60000
+        });
+        const data = await response.text();
+        console.log(`  [XAI] /videos/generations → ${response.status}`);
+        res.status(response.status).type('application/json').send(data);
+    } catch (err) {
+        console.error('  [ERROR] XAI video start failed:', err.message);
+        res.status(502).json({ error: `Proxy error: ${err.message}` });
+    }
+});
+
+/**
+ * GET /api/xai/videos/:requestId
+ * Poll video generation status
+ */
+app.get('/api/xai/videos/:requestId', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+        return res.status(401).json({ error: 'No Authorization header provided' });
+    }
+
+    try {
+        const { requestId } = req.params;
+        console.log(`  [XAI] GET /videos/${requestId}`);
+        const response = await fetch(`${XAI_API_BASE}/videos/${requestId}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': authHeader
+            },
+            timeout: 30000
+        });
+        const data = await response.text();
+        console.log(`  [XAI] video status → ${response.status}`);
+        res.status(response.status).type('application/json').send(data);
+    } catch (err) {
+        console.error('  [ERROR] XAI video poll failed:', err.message);
+        res.status(502).json({ error: `Proxy error: ${err.message}` });
+    }
+});
+
+// Test connection for OAuth token
+app.post('/api/xai/test', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+        return res.status(401).json({ error: 'No Authorization header provided' });
+    }
+    try {
+        const response = await fetch(`${XAI_API_BASE}/models`, {
+            headers: { 'Authorization': authHeader }
+        });
+        const data = await response.text();
+        res.status(response.status).type('application/json').send(data);
+    } catch (err) {
+        res.status(502).json({ error: err.message });
     }
 });
 

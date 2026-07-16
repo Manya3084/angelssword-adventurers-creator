@@ -1,9 +1,9 @@
 /**
  * ⚔️ AS Adventurer — Video Generation Module
  * Angel's Sword Studios
- * 
- * Tab 2: Generate animated videos from sprite images using Google's
- * Gemini Omni Flash API (gemini-omni-flash-preview via Interactions API).
+ *
+ * Tab 2: Generate animated videos from sprite images.
+ * Providers: Google Gemini Omni Flash  |  Grok Imagine (SuperGrok OAuth)
  */
 
 (function() {
@@ -18,6 +18,7 @@
     let generatedVideos = [];  // Array of { blob, url }
     let selectedVideos = new Set(); // Indices of selected videos
     let fromSpritePrep = false;
+    let aiProvider = localStorage.getItem('vg_ai_provider') || 'gemini'; // 'gemini' | 'grok'
 
     // ============================================
     // REFERENCE IMAGE HANDLING
@@ -32,12 +33,12 @@
             // Show preview
             const preview = document.getElementById('vgRefImagePreview');
             const img = document.getElementById('vgRefImage');
-            img.src = handoff.spriteBase64;
-            preview.classList.remove('hidden');
+            if (img) img.src = handoff.spriteBase64;
+            preview?.classList.remove('hidden');
 
             // Show "from sprite prep" indicator
-            document.getElementById('vgRefFromSprite').classList.remove('hidden');
-            document.getElementById('vgUploadZone').classList.add('hidden');
+            document.getElementById('vgRefFromSprite')?.classList.remove('hidden');
+            document.getElementById('vgUploadZone')?.classList.add('hidden');
         }
     }
 
@@ -45,7 +46,7 @@
         referenceImages = [];
         fromSpritePrep = false;
 
-        document.getElementById('vgRefFromSprite').classList.add('hidden');
+        document.getElementById('vgRefFromSprite')?.classList.add('hidden');
 
         const maxFiles = Math.min(files.length, 3);
         let loaded = 0;
@@ -60,8 +61,8 @@
                     // Show first image preview
                     const preview = document.getElementById('vgRefImagePreview');
                     const img = document.getElementById('vgRefImage');
-                    img.src = referenceImages[0].dataUrl;
-                    preview.classList.remove('hidden');
+                    if (img) img.src = referenceImages[0].dataUrl;
+                    preview?.classList.remove('hidden');
                     showToast(`${referenceImages.length} reference image(s) loaded`, 'success');
                 }
             };
@@ -73,13 +74,34 @@
     // VIDEO GENERATION
     // ============================================
 
+    function getSelectedProvider() {
+        const container = document.getElementById('vgProvider');
+        const active = container?.querySelector('.mode-btn.active');
+        return active?.dataset.provider || aiProvider || 'gemini';
+    }
+
     async function generateVideo() {
         if (generating) return;
 
-        const apiKey = localStorage.getItem('google_api_key');
-        if (!apiKey) {
-            showToast('No Google API key. Go to Settings to add one.', 'error');
-            return;
+        const provider = getSelectedProvider();
+
+        // Auth checks
+        if (provider === 'gemini') {
+            const apiKey = localStorage.getItem('google_api_key');
+            if (!apiKey) {
+                showToast('No Google API key. Go to Settings to add one.', 'error');
+                return;
+            }
+        } else if (provider === 'grok') {
+            if (!window.XaiOAuth) {
+                showToast('Grok OAuth module not loaded', 'error');
+                return;
+            }
+            const token = await window.XaiOAuth.getAccessToken();
+            if (!token) {
+                showToast('Not logged in with SuperGrok. Go to Settings → Login with SuperGrok.', 'error');
+                return;
+            }
         }
 
         if (referenceImages.length === 0) {
@@ -112,16 +134,22 @@
         cancelled = false;
 
         // Show progress
-        document.getElementById('vgProgress').classList.add('active');
+        document.getElementById('vgProgress')?.classList.add('active');
         document.getElementById('vgGenerateBtn').disabled = true;
         const status = document.getElementById('vgStatus');
-        status.innerHTML = '<div class="status-msg info"><span class="spinner"></span> Generating video — this may take several minutes…</div>';
+        const providerLabel = provider === 'grok' ? 'Grok Imagine' : 'Gemini Omni Flash';
+        status.innerHTML = `<div class="status-msg info"><span class="spinner"></span> Generating video with ${providerLabel} — this may take several minutes…</div>`;
 
         try {
             const promises = [];
             for (let i = 0; i < genCount; i++) {
                 if (cancelled) break;
-                promises.push(generateOneVideo(apiKey, prompt, duration, mode));
+                if (provider === 'grok') {
+                    promises.push(generateOneGrokVideo(prompt, duration, mode));
+                } else {
+                    const apiKey = localStorage.getItem('google_api_key');
+                    promises.push(generateOneGeminiVideo(apiKey, prompt, duration, mode));
+                }
             }
 
             const results = await Promise.allSettled(promises);
@@ -136,7 +164,7 @@
             if (generatedVideos.length > 0) {
                 displayVideoResults();
                 window.notificationSound?.play();
-                status.innerHTML = `<div class="status-msg success">✅ Generated ${generatedVideos.length} video(s)!</div>`;
+                status.innerHTML = `<div class="status-msg success">✅ Generated ${generatedVideos.length} video(s) with ${providerLabel}!</div>`;
             } else if (!cancelled) {
                 // Collect actual error messages from failed attempts
                 const errors = results
@@ -150,20 +178,15 @@
             status.innerHTML = `<div class="status-msg error">❌ ${err.message}</div>`;
         } finally {
             generating = false;
-            document.getElementById('vgProgress').classList.remove('active');
+            document.getElementById('vgProgress')?.classList.remove('active');
             document.getElementById('vgGenerateBtn').disabled = false;
+            const fillEl = document.getElementById('vgProgressFill');
+            if (fillEl) fillEl.style.width = '0%';
         }
     }
 
-    async function generateOneVideo(apiKey, prompt, duration, mode) {
-        // Build the Gemini Omni Flash Interactions API request
-        // Docs: https://ai.google.dev/gemini-api/docs/omni
-        // REST: POST https://generativelanguage.googleapis.com/v1beta/interactions?key=$API_KEY
-        //
-        // Text-only:  { model, input: "text string" }
-        // Image+text: { model, input: [{type:"image",data:"b64",mime_type:"image/png"},{type:"text",text:"prompt"}],
-        //              generation_config: { video_config: { task: "image_to_video" } } }
-
+    // ---------- Gemini path (original) ----------
+    async function generateOneGeminiVideo(apiKey, prompt, duration, mode) {
         const textPrompt = prompt || 'Generate a gentle breathing idle animation with slight body sway. Keep the character on the same background.';
 
         const requestBody = {
@@ -172,9 +195,6 @@
 
         // Build input — either a string (text-only) or an array (image + text)
         if (mode === 'keyframe' && referenceImages.length >= 2) {
-            // Keyframe mode: Gemini Omni Flash only supports 1 image.
-            // Send the start frame as the image, and incorporate the end
-            // frame concept into the text prompt for motion guidance.
             const startRef = referenceImages[0];
             const startRaw = startRef.dataUrl.includes(',') ? startRef.dataUrl.split(',')[1] : startRef.dataUrl;
             const startMime = startRef.dataUrl.includes('image/png') ? 'image/png' : 'image/jpeg';
@@ -187,7 +207,6 @@
                 video_config: { task: 'image_to_video' }
             };
         } else if (referenceImages.length > 0) {
-            // Reference mode: single image + prompt
             const ref = referenceImages[0];
             const raw = ref.dataUrl.includes(',') ? ref.dataUrl.split(',')[1] : ref.dataUrl;
             const mimeType = ref.dataUrl.includes('image/png') ? 'image/png' : 'image/jpeg';
@@ -220,59 +239,12 @@
         }
 
         const data = await response.json();
-        console.log('[VideoGen] Response:', JSON.stringify(data).substring(0, 500));
+        console.log('[VideoGen/Gemini] Response:', JSON.stringify(data).substring(0, 500));
 
-        // Direct response — extract video from Interactions response
-        return extractVideoFromResponse(data);
+        return extractVideoFromGeminiResponse(data);
     }
 
-    async function pollOperation(apiKey, operationName) {
-        const maxAttempts = 120; // 10 minutes at 5s intervals
-        const pollInterval = 5000;
-
-        for (let i = 0; i < maxAttempts; i++) {
-            if (cancelled) return null;
-
-            await new Promise(r => setTimeout(r, pollInterval));
-
-            const fillEl = document.getElementById('vgProgressFill');
-            const textEl = document.getElementById('vgProgressText');
-            if (fillEl) fillEl.style.width = `${Math.min(95, (i / maxAttempts) * 100)}%`;
-            if (textEl) textEl.textContent = `Generating video... (${Math.floor(i * pollInterval / 1000)}s)`;
-
-            try {
-                const resp = await fetch('/api/video/poll', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': apiKey
-                    },
-                    body: JSON.stringify({ operationName })
-                });
-
-                const data = await resp.json();
-
-                if (data.done || data.status === 'completed') {
-                    return extractVideoFromResponse(data);
-                }
-            } catch (e) {
-                console.warn('[VideoGen] Poll error:', e.message);
-            }
-        }
-
-        throw new Error('Video generation timed out after 10 minutes');
-    }
-
-    function extractVideoFromResponse(data) {
-        // Interactions API response format:
-        // { steps: [
-        //   { type: "user_input", content: [...] },
-        //   { type: "thought", content: [...] },
-        //   { type: "model_output", content: [
-        //     { type: "video", mime_type: "video/mp4", data: "base64..." }
-        //   ]}
-        // ], id: "...", status: "completed", model: "gemini-omni-flash-preview" }
-
+    function extractVideoFromGeminiResponse(data) {
         // Pattern 1: Interactions API — steps[] with model_output
         if (data.steps && Array.isArray(data.steps)) {
             for (const step of data.steps) {
@@ -304,11 +276,165 @@
 
         // Pattern 3: Nested result (from polled operation)
         if (data.result) {
-            return extractVideoFromResponse(data.result);
+            return extractVideoFromGeminiResponse(data.result);
         }
 
-        console.warn('[VideoGen] Could not extract video from response:', JSON.stringify(data).substring(0, 1000));
-        throw new Error('No video data found in API response. Check the console for details.');
+        console.warn('[VideoGen] Could not extract video from Gemini response:', JSON.stringify(data).substring(0, 1000));
+        throw new Error('No video data found in Gemini response. Check the console for details.');
+    }
+
+    // ---------- Grok Imagine path ----------
+    async function generateOneGrokVideo(prompt, duration, mode) {
+        const token = await window.XaiOAuth.getAccessToken();
+        if (!token) throw new Error('SuperGrok token unavailable — please re-login in Settings');
+
+        const textPrompt = prompt || 'Generate a gentle breathing idle animation with slight body sway. Keep the character on the same background. Perfect seamless loop. Static camera.';
+
+        // Pick primary image (start frame for keyframe, first ref otherwise)
+        const ref = (mode === 'keyframe' && referenceImages.length >= 1)
+            ? referenceImages[0]
+            : referenceImages[0];
+
+        if (!ref?.dataUrl) throw new Error('No reference image for Grok video');
+
+        let raw = ref.dataUrl.includes(',') ? ref.dataUrl.split(',')[1] : ref.dataUrl;
+
+        // Common Grok Imagine video image-to-video shape
+        const body = {
+            model: 'grok-imagine-video',
+            prompt: {
+                image: raw,
+                text: mode === 'keyframe'
+                    ? `Starting from this image (start frame), animate a smooth transition. ${textPrompt}`
+                    : textPrompt
+            }
+        };
+
+        // Optional duration if supported by the model (ignored if not)
+        if (duration) body.duration = duration;
+
+        console.log('[VideoGen/Grok] Starting video generation…');
+
+        const startResp = await fetch('/api/xai/videos/generations', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(body)
+        });
+
+        if (!startResp.ok) {
+            const err = await startResp.json().catch(() => ({}));
+            const msg = err?.error?.message || err?.error || err?.message || `Grok video start failed: ${startResp.status}`;
+            throw new Error(msg);
+        }
+
+        const startData = await startResp.json();
+        console.log('[VideoGen/Grok] Start response:', JSON.stringify(startData).substring(0, 400));
+
+        // Extract request id (several possible shapes)
+        const requestId = startData.request_id
+            || startData.id
+            || startData.requestId
+            || startData.data?.request_id
+            || startData.data?.id
+            || null;
+
+        // Sometimes the API returns the video immediately (rare)
+        if (!requestId) {
+            const immediate = await tryExtractGrokVideo(startData);
+            if (immediate) return immediate;
+            throw new Error('No request_id in Grok video response');
+        }
+
+        // Poll until done
+        return pollGrokVideo(token, requestId);
+    }
+
+    async function pollGrokVideo(token, requestId) {
+        const maxAttempts = 120; // ~10 min at 5s
+        const pollInterval = 5000;
+
+        for (let i = 0; i < maxAttempts; i++) {
+            if (cancelled) return null;
+
+            await new Promise(r => setTimeout(r, pollInterval));
+
+            const fillEl = document.getElementById('vgProgressFill');
+            const textEl = document.getElementById('vgProgressText');
+            if (fillEl) fillEl.style.width = `${Math.min(95, ((i + 1) / maxAttempts) * 100)}%`;
+            if (textEl) textEl.textContent = `Grok Imagine generating… (${Math.floor((i + 1) * pollInterval / 1000)}s)`;
+
+            try {
+                const resp = await fetch(`/api/xai/videos/${encodeURIComponent(requestId)}`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!resp.ok) {
+                    console.warn('[VideoGen/Grok] Poll HTTP', resp.status);
+                    continue;
+                }
+
+                const data = await resp.json();
+                const status = (data.status || data.state || '').toLowerCase();
+
+                if (status === 'done' || status === 'completed' || status === 'succeeded' || status === 'success') {
+                    const video = await tryExtractGrokVideo(data);
+                    if (video) return video;
+                    throw new Error('Grok reported done but no video URL/data found');
+                }
+
+                if (status === 'failed' || status === 'error' || status === 'cancelled') {
+                    throw new Error(data.error || data.message || `Grok video ${status}`);
+                }
+
+                // still pending / processing
+            } catch (e) {
+                if (e.message && e.message.includes('Grok')) throw e;
+                console.warn('[VideoGen/Grok] Poll error:', e.message);
+            }
+        }
+
+        throw new Error('Grok video generation timed out after ~10 minutes');
+    }
+
+    async function tryExtractGrokVideo(data) {
+        // Shape A: video.url (download)
+        const url = data.video?.url
+            || data.url
+            || data.video_url
+            || data.data?.video?.url
+            || data.data?.url
+            || data.result?.video?.url
+            || null;
+
+        if (url) {
+            console.log('[VideoGen/Grok] Downloading video from', url.substring(0, 80));
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`Failed to download Grok video: ${resp.status}`);
+            const blob = await resp.blob();
+            return { blob, url: URL.createObjectURL(blob) };
+        }
+
+        // Shape B: base64 video
+        const b64 = data.video?.data
+            || data.data?.b64
+            || data.b64
+            || data.video_base64
+            || null;
+
+        if (b64) {
+            const mime = data.video?.mime_type || data.mime_type || 'video/mp4';
+            const raw = b64.includes(',') ? b64.split(',')[1] : b64;
+            const blob = base64ToBlob(raw, mime);
+            return { blob, url: URL.createObjectURL(blob) };
+        }
+
+        return null;
     }
 
     // ============================================
@@ -432,9 +558,27 @@
     function initVideoGen() {
         // Mode selector (Reference / Keyframe)
         initModeSelector('vgModeSelector', (mode) => {
-            document.getElementById('vgReferenceMode').classList.toggle('hidden', mode !== 'reference');
-            document.getElementById('vgKeyframeMode').classList.toggle('hidden', mode !== 'keyframe');
+            document.getElementById('vgReferenceMode')?.classList.toggle('hidden', mode !== 'reference');
+            document.getElementById('vgKeyframeMode')?.classList.toggle('hidden', mode !== 'keyframe');
         });
+
+        // Provider selector (Gemini | Grok)
+        const providerEl = document.getElementById('vgProvider');
+        if (providerEl) {
+            providerEl.querySelectorAll('.mode-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.provider === aiProvider);
+            });
+            providerEl.addEventListener('click', (e) => {
+                const btn = e.target.closest('.mode-btn');
+                if (!btn || !btn.dataset.provider) return;
+                providerEl.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                aiProvider = btn.dataset.provider;
+                localStorage.setItem('vg_ai_provider', aiProvider);
+                updateGenerateButtonLabel();
+            });
+        }
+        updateGenerateButtonLabel();
 
         // Upload zone
         initUploadZone('vgUploadZone', 'vgFileInput', (files) => {
@@ -452,10 +596,14 @@
 
                     // Show preview
                     const preview = document.getElementById('vgStartFramePreview');
-                    preview.src = e.target.result;
-                    preview.classList.remove('hidden');
-                    document.getElementById('vgStartFrameIcon').textContent = '✅';
-                    document.getElementById('vgStartFrameText').textContent = 'Start Frame Loaded';
+                    if (preview) {
+                        preview.src = e.target.result;
+                        preview.classList.remove('hidden');
+                    }
+                    const icon = document.getElementById('vgStartFrameIcon');
+                    const text = document.getElementById('vgStartFrameText');
+                    if (icon) icon.textContent = '✅';
+                    if (text) text.textContent = 'Start Frame Loaded';
                     showToast('Start frame loaded', 'success');
                 };
                 reader.readAsDataURL(files[0]);
@@ -471,10 +619,14 @@
 
                     // Show preview
                     const preview = document.getElementById('vgEndFramePreview');
-                    preview.src = e.target.result;
-                    preview.classList.remove('hidden');
-                    document.getElementById('vgEndFrameIcon').textContent = '✅';
-                    document.getElementById('vgEndFrameText').textContent = 'End Frame Loaded';
+                    if (preview) {
+                        preview.src = e.target.result;
+                        preview.classList.remove('hidden');
+                    }
+                    const icon = document.getElementById('vgEndFrameIcon');
+                    const text = document.getElementById('vgEndFrameText');
+                    if (icon) icon.textContent = '✅';
+                    if (text) text.textContent = 'End Frame Loaded';
                     showToast('End frame loaded', 'success');
                 };
                 reader.readAsDataURL(files[0]);
@@ -514,6 +666,19 @@
         const panel = document.getElementById('tab-video-gen');
         if (panel) {
             observer.observe(panel, { attributes: true, attributeFilter: ['class'] });
+        }
+    }
+
+    function updateGenerateButtonLabel() {
+        const btn = document.getElementById('vgGenerateBtn');
+        if (!btn) return;
+        const p = getSelectedProvider();
+        if (p === 'grok') {
+            btn.innerHTML = '🎬 Generate Video (Grok Imagine)';
+            btn.title = 'Generate video(s) using Grok Imagine (SuperGrok)';
+        } else {
+            btn.innerHTML = '🎬 Generate Video (Gemini)';
+            btn.title = 'Generate video(s) using Gemini Omni Flash';
         }
     }
 
