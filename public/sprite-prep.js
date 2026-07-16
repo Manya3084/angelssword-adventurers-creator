@@ -1,9 +1,10 @@
 /**
  * ⚔️ AS Adventurer — Sprite Prep Module
  * Angel's Sword Studios
- * 
+ *
  * Tab 1: Create or prepare a 1280×720 sprite image with chroma key background.
  * Two modes: Manual Upload and AI Generate.
+ * AI providers: OpenAI (GPT Image 2) or Grok Imagine (SuperGrok OAuth).
  */
 
 (function() {
@@ -37,6 +38,7 @@
     let charRefBase64 = null;
     let styleRefBase64 = null;
     let raceMode = 'normal'; // 'normal', 'kanolith', or 'zoalith'
+    let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai'; // 'openai' | 'grok'
 
     // ============================================
     // MANUAL MODE — CANVAS SYSTEM
@@ -146,7 +148,6 @@
 
     /**
      * Advanced key color analysis using corner-sampling to ignore background
-     * (Ported from ASArtTool sprite-generator.js _analyzeReferenceForKeyColor)
      */
     function analyzeReferenceForKeyColor(dataUrl, swatchContainerId) {
         const img = new Image();
@@ -340,6 +341,12 @@
         });
     }
 
+    function getSelectedProvider() {
+        const container = document.getElementById('sgProvider');
+        const active = container?.querySelector('.mode-btn.active');
+        return active?.dataset.provider || aiProvider || 'openai';
+    }
+
     async function generate() {
         if (generating) return;
 
@@ -350,10 +357,25 @@
             return;
         }
 
-        const apiKey = localStorage.getItem('openai_api_key');
-        if (!apiKey) {
-            showToast('No OpenAI API key. Go to Settings to add one.', 'error');
-            return;
+        const provider = getSelectedProvider();
+
+        // Auth checks
+        if (provider === 'openai') {
+            const apiKey = localStorage.getItem('openai_api_key');
+            if (!apiKey) {
+                showToast('No OpenAI API key. Go to Settings to add one.', 'error');
+                return;
+            }
+        } else if (provider === 'grok') {
+            if (!window.XaiOAuth) {
+                showToast('Grok OAuth module not loaded', 'error');
+                return;
+            }
+            const token = await window.XaiOAuth.getAccessToken();
+            if (!token) {
+                showToast('Not logged in with SuperGrok. Go to Settings → Login with SuperGrok.', 'error');
+                return;
+            }
         }
 
         // Get generation count
@@ -369,7 +391,8 @@
         document.getElementById('sgGenerateBtn').disabled = true;
 
         const status = document.getElementById('sgStatus');
-        status.innerHTML = '<div class="status-msg info"><span class="spinner"></span> Generating sprite — this may take up to a minute…</div>';
+        const providerLabel = provider === 'grok' ? 'Grok Imagine' : 'GPT Image 2';
+        status.innerHTML = `<div class="status-msg info"><span class="spinner"></span> Generating with ${providerLabel} — this may take up to a minute…</div>`;
 
         try {
             let promptText = buildPrompt();
@@ -383,7 +406,12 @@
             const promises = [];
             for (let i = 0; i < genCount; i++) {
                 if (genCancelled) break;
-                promises.push(generateOne(apiKey, promptText, images));
+                if (provider === 'grok') {
+                    promises.push(generateOneGrok(promptText, images));
+                } else {
+                    const apiKey = localStorage.getItem('openai_api_key');
+                    promises.push(generateOneOpenAI(apiKey, promptText, images));
+                }
             }
 
             const results = await Promise.allSettled(promises);
@@ -398,9 +426,14 @@
             if (genResults.length > 0) {
                 displayResults();
                 window.notificationSound?.play();
-                status.innerHTML = `<div class="status-msg success">✅ Generated ${genResults.length} sprite(s)!</div>`;
+                status.innerHTML = `<div class="status-msg success">✅ Generated ${genResults.length} sprite(s) with ${providerLabel}!</div>`;
             } else if (!genCancelled) {
-                status.innerHTML = '<div class="status-msg error">❌ All generations failed. Check your API key and try again.</div>';
+                const errors = results
+                    .filter(r => r.status === 'rejected')
+                    .map(r => r.reason?.message || String(r.reason));
+                const errorMsg = errors[0] || 'All generations failed. Check auth / API key.';
+                status.innerHTML = `<div class="status-msg error">❌ ${errorMsg}</div>`;
+                console.error('[SpritePrep] Failures:', errors);
             }
         } catch (err) {
             status.innerHTML = `<div class="status-msg error">❌ ${err.message}</div>`;
@@ -411,7 +444,7 @@
         }
     }
 
-    async function generateOne(apiKey, prompt, images) {
+    async function generateOneOpenAI(apiKey, prompt, images) {
         const hasImages = images.length > 0;
         const endpoint = hasImages ? '/api/edits' : '/api/generate';
 
@@ -436,14 +469,76 @@
 
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
-            throw new Error(err?.error?.message || `API error: ${response.status}`);
+            throw new Error(err?.error?.message || `OpenAI API error: ${response.status}`);
         }
 
         const data = await response.json();
         const b64 = data?.data?.[0]?.b64_json;
-        if (!b64) throw new Error('No image in API response');
+        if (!b64) throw new Error('No image in OpenAI response');
 
         return `data:image/png;base64,${b64}`;
+    }
+
+    async function generateOneGrok(prompt, images) {
+        const token = await window.XaiOAuth.getAccessToken();
+        if (!token) throw new Error('SuperGrok token unavailable — please re-login in Settings');
+
+        // Grok Imagine currently best with text prompt.
+        // If character reference exists we still send a strong text instruction;
+        // some Imagine endpoints accept image refs in future — keep simple & reliable for now.
+        let finalPrompt = prompt;
+        if (images.length > 0) {
+            finalPrompt = prompt + '\n\n(Note: Match the character appearance described and any provided visual references as closely as possible.)';
+        }
+
+        const body = {
+            model: 'grok-imagine-image-quality',
+            prompt: finalPrompt,
+            n: 1,
+            aspect_ratio: '16:9',
+            resolution: '1k',
+            response_format: 'b64_json'
+        };
+
+        const response = await fetch('/api/xai/images/generations', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            const msg = err?.error?.message || err?.error || err?.message || `Grok Imagine error: ${response.status}`;
+            throw new Error(msg);
+        }
+
+        const data = await response.json();
+
+        // Flexible extraction for b64 / url shapes
+        let b64 = data?.data?.[0]?.b64_json
+            || data?.data?.[0]?.b64
+            || data?.b64_json
+            || data?.image
+            || null;
+
+        if (!b64 && data?.data?.[0]?.url) {
+            // Rare: download URL and convert (unlikely with response_format=b64_json)
+            throw new Error('Grok returned a URL instead of base64 — unexpected. Check console.');
+        }
+
+        if (!b64) {
+            console.warn('[SpritePrep/Grok] Unexpected response:', JSON.stringify(data).substring(0, 500));
+            throw new Error('No image data in Grok Imagine response');
+        }
+
+        // Ensure data URI prefix
+        if (!b64.startsWith('data:')) {
+            b64 = `data:image/png;base64,${b64}`;
+        }
+        return b64;
     }
 
     function displayResults() {
@@ -470,8 +565,8 @@
             updateGenPreview(genResults[0]);
         }
 
-        // Card action handlers
-        grid.addEventListener('click', (e) => {
+        // Card action handlers (re-bind safe via once flag would be better, but keep simple)
+        grid.onclick = (e) => {
             const btn = e.target.closest('[data-action]');
             if (!btn) return;
             const idx = parseInt(btn.dataset.idx);
@@ -488,7 +583,7 @@
                 selectedResult = dataUrl;
                 updateGenPreview(dataUrl);
             }
-        });
+        };
     }
 
     function updateGenPreview(dataUrl) {
@@ -570,7 +665,7 @@
         const manualMode = document.getElementById('spriteManualMode');
         const generateMode = document.getElementById('spriteGenerateMode');
 
-        modeSelector.addEventListener('click', (e) => {
+        modeSelector?.addEventListener('click', (e) => {
             const btn = e.target.closest('.mode-btn');
             if (!btn) return;
             modeSelector.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
@@ -641,6 +736,25 @@
         document.getElementById('spHandoffBtn')?.addEventListener('click', handoffToVideoGen);
 
         // --- Generative Mode ---
+        // Provider selector (OpenAI | Grok)
+        const providerEl = document.getElementById('sgProvider');
+        if (providerEl) {
+            // Restore saved
+            providerEl.querySelectorAll('.mode-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.provider === aiProvider);
+            });
+            providerEl.addEventListener('click', (e) => {
+                const btn = e.target.closest('.mode-btn');
+                if (!btn || !btn.dataset.provider) return;
+                providerEl.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                aiProvider = btn.dataset.provider;
+                localStorage.setItem('sg_ai_provider', aiProvider);
+                updateGenerateButtonLabel();
+            });
+        }
+        updateGenerateButtonLabel();
+
         // Color swatches (generative)
         initColorSwatches('sgColorSwatches', (color) => {
             selectedKeyColor = color;
@@ -717,6 +831,19 @@
 
         // Rectangle selection on canvas
         initAdvKeyRectSelection();
+    }
+
+    function updateGenerateButtonLabel() {
+        const btn = document.getElementById('sgGenerateBtn');
+        if (!btn) return;
+        const p = getSelectedProvider();
+        if (p === 'grok') {
+            btn.innerHTML = '✨ Generate Sprite (Grok Imagine)';
+            btn.title = 'Generate sprite(s) using Grok Imagine (SuperGrok)';
+        } else {
+            btn.innerHTML = '✨ Generate Sprite (OpenAI)';
+            btn.title = 'Generate sprite(s) using GPT Image 2';
+        }
     }
 
     // ============================================
