@@ -1,10 +1,12 @@
 /**
  * ⚔️ ComfyUI bridge — UI injection + generation helpers
- * Adds ComfyUI provider buttons, Settings panel wiring, and generation entry points.
  *
- * IMPORTANT: Settings panel may already exist in index.html. We always wire
- * handlers even when injection is skipped (previous bug: early return left
- * Save/Test dead).
+ * Settings panel always has THREE separate fields:
+ *   1. ComfyUI URL
+ *   2. Sprite model (checkpoint)
+ *   3. Video model (LTX)
+ *
+ * Save shows the same status-msg + toast pattern as OpenAI / Gemini.
  */
 (function () {
     'use strict';
@@ -62,116 +64,118 @@
         el.appendChild(btn);
     }
 
-    function updateExistingSettingsCopy() {
-        const panel = document.getElementById('settingsComfyPanel');
-        if (!panel) return;
+    /** Full panel HTML — separate sprite vs video model fields */
+    function buildPanelHTML() {
+        const c = window.ComfyUIClient;
+        const url = c ? c.getBaseUrl() : 'http://127.0.0.1:8188';
+        const sprite = c ? c.getCheckpoint() : 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
+        const video = c ? c.getVideoModel() : 'LTX-Video-ICLoRA-pose-13b-0.9.7.safetensors';
 
-        const sub = panel.querySelector('.panel-subtitle');
-        if (sub) {
-            sub.innerHTML =
-                'Local generation with <strong>Pony Diffusion V6 XL</strong> (sprites @ 1216×832) ' +
-                'and <strong>LTX-Video-ICLoRA-pose-13b</strong> (video). ComfyUI must be running.';
-        }
+        return `
+            <div class="panel-title"><span class="title-icon">🖥️</span> ComfyUI (Local)</div>
+            <div class="panel-subtitle">
+                Point AS Adventurer at your local ComfyUI instance.
+                Sprite and video models are configured <strong>separately</strong> below.
+            </div>
 
-        const ckptInput = document.getElementById('settingsComfyCkpt');
-        if (ckptInput) {
-            ckptInput.placeholder = 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
-            // Only replace outdated default if user never customized
-            if (
-                !ckptInput.value ||
-                ckptInput.value === 'animagine-xl-4.0.safetensors'
-            ) {
-                const stored = window.ComfyUIClient?.getCheckpoint?.();
-                ckptInput.value = stored || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
-            }
-        }
+            <div class="form-row">
+                <label for="settingsComfyUrl">ComfyUI URL</label>
+                <input type="text" id="settingsComfyUrl" placeholder="http://127.0.0.1:8188" value="${escapeAttr(url)}">
+            </div>
 
-        // Ensure video model field exists
-        if (!document.getElementById('settingsComfyVideoModel')) {
-            const ckptRow = ckptInput?.closest('.form-row');
-            if (ckptRow && ckptRow.parentNode) {
-                const videoRow = document.createElement('div');
-                videoRow.className = 'form-row';
-                videoRow.innerHTML = `
-                    <label for="settingsComfyVideoModel">Video model filename (LTX)</label>
-                    <input type="text" id="settingsComfyVideoModel"
-                        placeholder="LTX-Video-ICLoRA-pose-13b-0.9.7.safetensors">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">
-                        Exact filename under ComfyUI models (checkpoints or as required by ComfyUI-LTXVideo).
-                        Needs <strong>ComfyUI-LTXVideo</strong> + <strong>Video Helper Suite</strong> nodes.
-                    </div>`;
-                ckptRow.parentNode.insertBefore(videoRow, ckptRow.nextSibling);
-            }
-        }
+            <hr class="gold-divider">
 
-        const videoInput = document.getElementById('settingsComfyVideoModel');
-        if (videoInput && !videoInput.value) {
-            videoInput.value =
-                window.ComfyUIClient?.getVideoModel?.() ||
-                'LTX-Video-ICLoRA-pose-13b-0.9.7.safetensors';
-        }
+            <div class="form-row">
+                <label for="settingsComfyCkpt">🎨 Sprite model <span class="text-dim">(checkpoint)</span></label>
+                <input type="text" id="settingsComfyCkpt"
+                    placeholder="ponyDiffusionV6XL_v6StartWithThisOne.safetensors"
+                    value="${escapeAttr(sprite)}">
+                <div class="text-dim mt-1" style="font-size:0.7rem">
+                    Used for <strong>Sprite Prep → AI Generate</strong>.
+                    Exact filename in <code>ComfyUI/models/checkpoints/</code>
+                    (default: Pony Diffusion V6 XL @ 1216×832).
+                </div>
+            </div>
+
+            <div class="form-row">
+                <label for="settingsComfyVideoModel">🎬 Video model <span class="text-dim">(LTX / AnimateDiff / …)</span></label>
+                <input type="text" id="settingsComfyVideoModel"
+                    placeholder="LTX-Video-ICLoRA-pose-13b-0.9.7.safetensors"
+                    value="${escapeAttr(video)}">
+                <div class="text-dim mt-1" style="font-size:0.7rem">
+                    Used for <strong>Generate Video</strong> only.
+                    Exact filename as required by your ComfyUI-LTXVideo pack
+                    (default: LTX-Video-ICLoRA-pose-13b-0.9.7).
+                    Needs <strong>ComfyUI-LTXVideo</strong> + <strong>Video Helper Suite</strong>.
+                </div>
+            </div>
+
+            <div class="api-key-row" style="margin-top:0.75rem">
+                <button type="button" class="btn btn-sm btn-secondary" id="settingsComfySave">Save</button>
+                <button type="button" class="btn btn-sm btn-accent" id="settingsComfyTest">Test Connection</button>
+            </div>
+
+            <!-- Same status slot pattern as OpenAI / Gemini -->
+            <div id="settingsComfyStatus"></div>
+
+            <!-- Persistent "currently saved" summary (updated on Save) -->
+            <div id="settingsComfySavedSummary" class="text-mono text-dim mt-1" style="font-size:0.7rem"></div>
+        `;
     }
 
-    function injectSettingsPanel() {
+    function escapeAttr(s) {
+        return String(s || '')
+            .replace(/&/g, '&')
+            .replace(/"/g, '"')
+            .replace(/</g, '<')
+            .replace(/>/g, '>');
+    }
+
+    function renderSavedSummary() {
+        const el = document.getElementById('settingsComfySavedSummary');
+        const c = window.ComfyUIClient;
+        if (!el || !c) return;
+        el.innerHTML =
+            'Saved · URL: <span class="text-gold">' + escapeAttr(c.getBaseUrl()) + '</span><br>' +
+            'Sprite: <span class="text-gold">' + escapeAttr(c.getCheckpoint()) + '</span><br>' +
+            'Video: <span class="text-gold">' + escapeAttr(c.getVideoModel()) + '</span>';
+    }
+
+    /**
+     * Always rebuild the ComfyUI settings panel so sprite/video fields are present
+     * and labeled, regardless of whatever was in the static index.html.
+     */
+    function ensureSettingsPanel() {
         const section = document.querySelector('#tab-settings .settings-section');
         if (!section) return;
 
-        // If static panel already in index.html, just refresh copy — do NOT return before wiring
-        if (document.getElementById('settingsComfyUrl')) {
-            updateExistingSettingsCopy();
-            return;
-        }
+        let panel = document.getElementById('settingsComfyPanel');
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.className = 'glass-panel';
+            panel.id = 'settingsComfyPanel';
 
-        const panel = document.createElement('div');
-        panel.className = 'glass-panel';
-        panel.id = 'settingsComfyPanel';
-        panel.innerHTML = `
-            <div class="panel-title"><span class="title-icon">🖥️</span> ComfyUI (Local)</div>
-            <div class="panel-subtitle">
-                Local generation with <strong>Pony Diffusion V6 XL</strong> (sprites @ 1216×832)
-                and <strong>LTX-Video-ICLoRA-pose-13b</strong> (video). ComfyUI must be running.
-                Default: <code>http://127.0.0.1:8188</code>
-            </div>
-            <div class="form-row">
-                <label for="settingsComfyUrl">ComfyUI URL</label>
-                <input type="text" id="settingsComfyUrl" placeholder="http://127.0.0.1:8188">
-            </div>
-            <div class="form-row">
-                <label for="settingsComfyCkpt">Sprite checkpoint filename</label>
-                <input type="text" id="settingsComfyCkpt" placeholder="ponyDiffusionV6XL_v6StartWithThisOne.safetensors">
-                <div class="text-dim mt-1" style="font-size:0.7rem">Must match exact filename in ComfyUI/models/checkpoints/</div>
-            </div>
-            <div class="form-row">
-                <label for="settingsComfyVideoModel">Video model filename (LTX)</label>
-                <input type="text" id="settingsComfyVideoModel" placeholder="LTX-Video-ICLoRA-pose-13b-0.9.7.safetensors">
-                <div class="text-dim mt-1" style="font-size:0.7rem">
-                    Requires ComfyUI-LTXVideo + Video Helper Suite custom nodes.
-                </div>
-            </div>
-            <div class="api-key-row" style="margin-top:0.5rem">
-                <button class="btn btn-sm btn-secondary" id="settingsComfySave">Save</button>
-                <button class="btn btn-sm btn-accent" id="settingsComfyTest">Test Connection</button>
-            </div>
-            <div id="settingsComfyStatus"></div>
-        `;
-
-        const notif = Array.from(section.querySelectorAll('.glass-panel')).find(p =>
-            p.textContent.includes('Notifications')
-        );
-        if (notif) section.insertBefore(panel, notif);
-        else {
-            const about = Array.from(section.querySelectorAll('.glass-panel')).find(p =>
-                p.querySelector('.about-section')
+            const notif = Array.from(section.querySelectorAll('.glass-panel')).find(p =>
+                p.textContent.includes('Notifications')
             );
-            if (about) section.insertBefore(panel, about);
-            else section.appendChild(panel);
+            if (notif) section.insertBefore(panel, notif);
+            else {
+                const about = Array.from(section.querySelectorAll('.glass-panel')).find(p =>
+                    p.querySelector('.about-section')
+                );
+                if (about) section.insertBefore(panel, about);
+                else section.appendChild(panel);
+            }
         }
+
+        // Always refresh inner HTML so separate model fields exist
+        panel.innerHTML = buildPanelHTML();
+        renderSavedSummary();
     }
 
-    function showStatus(el, type, text) {
-        if (!el) return;
-        const cls = type === 'success' ? 'success' : type === 'error' ? 'error' : 'info';
-        el.innerHTML = `<div class="status-msg ${cls}">${text}</div>`;
+    function setStatus(html) {
+        const el = document.getElementById('settingsComfyStatus');
+        if (el) el.innerHTML = html || '';
     }
 
     function wireSettingsHandlers() {
@@ -182,81 +186,90 @@
         }
 
         const urlInput = document.getElementById('settingsComfyUrl');
-        const ckptInput = document.getElementById('settingsComfyCkpt');
+        const spriteInput = document.getElementById('settingsComfyCkpt');
         const videoInput = document.getElementById('settingsComfyVideoModel');
         const saveBtn = document.getElementById('settingsComfySave');
         const testBtn = document.getElementById('settingsComfyTest');
-        const statusEl = document.getElementById('settingsComfyStatus');
 
-        if (!urlInput || !saveBtn || !testBtn) {
-            console.warn('[ComfyUI] Settings controls not found in DOM');
+        if (!urlInput || !spriteInput || !videoInput || !saveBtn || !testBtn) {
+            console.warn('[ComfyUI] Settings controls missing after panel build', {
+                urlInput: !!urlInput,
+                spriteInput: !!spriteInput,
+                videoInput: !!videoInput,
+                saveBtn: !!saveBtn,
+                testBtn: !!testBtn
+            });
             return;
         }
 
-        // Prevent double-binding
+        // Idempotent: re-bind after panel rebuild by cloning buttons
         if (saveBtn.dataset.comfyWired === '1') return;
         saveBtn.dataset.comfyWired = '1';
         testBtn.dataset.comfyWired = '1';
 
-        // Populate from localStorage
+        // Values already filled by buildPanelHTML; re-sync from storage
         urlInput.value = c.getBaseUrl();
-        if (ckptInput) ckptInput.value = c.getCheckpoint();
-        if (videoInput) videoInput.value = c.getVideoModel();
+        spriteInput.value = c.getCheckpoint();
+        videoInput.value = c.getVideoModel();
 
         saveBtn.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
+
             const url = (urlInput.value || '').trim() || c.DEFAULT_URL;
+            const sprite = (spriteInput.value || '').trim() || c.DEFAULT_CKPT;
+            const video = (videoInput.value || '').trim() || c.DEFAULT_VIDEO_MODEL;
+
             c.setBaseUrl(url);
+            c.setCheckpoint(sprite);
+            c.setVideoModel(video);
+
+            // Reflect normalized values back into inputs
             urlInput.value = c.getBaseUrl();
+            spriteInput.value = c.getCheckpoint();
+            videoInput.value = c.getVideoModel();
 
-            if (ckptInput) {
-                const ck = (ckptInput.value || '').trim() || c.DEFAULT_CKPT;
-                c.setCheckpoint(ck);
-                ckptInput.value = c.getCheckpoint();
-            }
-            if (videoInput && c.setVideoModel) {
-                const vm = (videoInput.value || '').trim() || c.DEFAULT_VIDEO_MODEL;
-                c.setVideoModel(vm);
-                videoInput.value = c.getVideoModel();
-            }
+            // Match OpenAI/Gemini: toast + green status-msg under the buttons
+            setStatus('<div class="status-msg success">✅ ComfyUI settings saved</div>');
+            renderSavedSummary();
 
-            showStatus(statusEl, 'success', '✅ Settings saved');
-            if (typeof showToast === 'function') showToast('ComfyUI settings saved', 'success');
-            else console.log('[ComfyUI] settings saved');
+            if (typeof showToast === 'function') {
+                showToast('ComfyUI settings saved', 'success');
+            }
         });
 
         testBtn.addEventListener('click', async (e) => {
             e.preventDefault();
             e.stopPropagation();
 
-            // Persist current form values before testing
+            // Save current form values before testing (same as key test flows)
             const url = (urlInput.value || '').trim() || c.DEFAULT_URL;
+            const sprite = (spriteInput.value || '').trim() || c.DEFAULT_CKPT;
+            const video = (videoInput.value || '').trim() || c.DEFAULT_VIDEO_MODEL;
             c.setBaseUrl(url);
-            if (ckptInput) c.setCheckpoint((ckptInput.value || '').trim() || c.DEFAULT_CKPT);
-            if (videoInput && c.setVideoModel) {
-                c.setVideoModel((videoInput.value || '').trim() || c.DEFAULT_VIDEO_MODEL);
-            }
+            c.setCheckpoint(sprite);
+            c.setVideoModel(video);
+            urlInput.value = c.getBaseUrl();
+            spriteInput.value = c.getCheckpoint();
+            videoInput.value = c.getVideoModel();
+            renderSavedSummary();
 
-            showStatus(
-                statusEl,
-                'info',
-                '<span class="spinner"></span> Testing ComfyUI at ' + c.getBaseUrl() + '…'
+            setStatus(
+                '<div class="status-msg info"><span class="spinner"></span> Testing connection to ' +
+                escapeAttr(c.getBaseUrl()) + '…</div>'
             );
 
             try {
-                const stats = await c.testConnection();
-                const devices = stats?.devices || stats?.system?.devices;
-                const extra = devices ? ` · devices: ${JSON.stringify(devices).slice(0, 80)}` : '';
-                showStatus(statusEl, 'success', '✅ ComfyUI connected' + extra);
+                await c.testConnection();
+                setStatus('<div class="status-msg success">✅ Connection successful!</div>');
                 if (typeof showToast === 'function') showToast('ComfyUI connection OK', 'success');
             } catch (err) {
-                showStatus(statusEl, 'error', '❌ ' + err.message);
+                setStatus('<div class="status-msg error">❌ ' + escapeAttr(err.message) + '</div>');
                 if (typeof showToast === 'function') showToast(err.message, 'error');
             }
         });
 
-        console.log('[ComfyUI] Settings handlers wired');
+        console.log('[ComfyUI] Settings handlers wired (sprite + video models separate)');
     }
 
     function patchSpriteGenerate() {
@@ -294,7 +307,6 @@
                 raceDirective = 'anthropomorphic, furry, snout, ';
             }
 
-            // Pony Diffusion V6 XL prompt style
             const promptText = [
                 'score_9, score_8_up, score_7_up, source_anime,',
                 `1girl, ${name}${desc ? ', ' + desc : ''}, ${action},`,
@@ -312,9 +324,11 @@
             const progress = document.getElementById('sgProgress');
             progress?.classList.add('active');
             btn.disabled = true;
+
+            const ckptName = window.ComfyUIClient?.getCheckpoint?.() || 'Pony V6 XL';
             if (status) {
                 status.innerHTML =
-                    '<div class="status-msg info"><span class="spinner"></span> Generating with ComfyUI (Pony V6 XL 1216×832)…</div>';
+                    `<div class="status-msg info"><span class="spinner"></span> Generating with ComfyUI (${escapeAttr(ckptName)} @ 1216×832)…</div>`;
             }
 
             try {
@@ -370,7 +384,7 @@
                             const i = parseInt(dl.dataset.comfyDl, 10);
                             const a = document.createElement('a');
                             a.href = results[i];
-                            a.download = `${name || 'sprite'}_pony_${i + 1}.png`;
+                            a.download = `${name || 'sprite'}_comfy_${i + 1}.png`;
                             a.click();
                         }
                         if (sel) {
@@ -400,7 +414,7 @@
 
                 if (status) {
                     status.innerHTML =
-                        `<div class="status-msg success">✅ Generated ${results.length} sprite(s) with Pony V6 XL!</div>`;
+                        `<div class="status-msg success">✅ Generated ${results.length} sprite(s) with ComfyUI!</div>`;
                 }
                 window.notificationSound?.play();
             } catch (err) {
@@ -449,16 +463,18 @@
             const progress = document.getElementById('vgProgress');
             progress?.classList.add('active');
             btn.disabled = true;
+
+            const videoModel = window.ComfyUIClient?.getVideoModel?.() || 'LTX';
             if (status) {
                 status.innerHTML =
-                    '<div class="status-msg info"><span class="spinner"></span> Generating video with LTX-Video ICLoRA…</div>';
+                    `<div class="status-msg info"><span class="spinner"></span> Generating video with ComfyUI (${escapeAttr(videoModel)})…</div>`;
             }
 
             try {
                 const result = await generateVideo(prompt, imageDataUrl, duration, (p) => {
                     if (status && p.stage === 'polling') {
                         status.innerHTML =
-                            `<div class="status-msg info"><span class="spinner"></span> LTX video… (${p.attempt || 0})</div>`;
+                            `<div class="status-msg info"><span class="spinner"></span> ComfyUI video… (${p.attempt || 0})</div>`;
                     }
                     if (status && p.stage === 'upload') {
                         status.innerHTML =
@@ -492,7 +508,7 @@
                     }
                 }
 
-                if (status) status.innerHTML = '<div class="status-msg success">✅ LTX video ready!</div>';
+                if (status) status.innerHTML = '<div class="status-msg success">✅ ComfyUI video ready!</div>';
                 window.notificationSound?.play();
             } catch (err) {
                 console.error('[ComfyUI video]', err);
@@ -510,19 +526,17 @@
             'sgProvider',
             'comfyui',
             '🖥️ ComfyUI',
-            'Use local ComfyUI (Pony Diffusion V6 XL)'
+            'Use local ComfyUI (sprite model from Settings)'
         );
         injectProviderButton(
             'vgProvider',
             'comfyui',
             '🖥️ ComfyUI',
-            'Use local ComfyUI (LTX-Video ICLoRA pose)'
+            'Use local ComfyUI (video model from Settings)'
         );
 
-        // 1) ensure panel exists / labels updated
-        injectSettingsPanel();
-        updateExistingSettingsCopy();
-        // 2) ALWAYS wire handlers (fixes dead Save/Test)
+        // Rebuild panel with separate sprite/video fields, then wire Save/Test
+        ensureSettingsPanel();
         wireSettingsHandlers();
 
         patchSpriteGenerate();
@@ -550,7 +564,7 @@
             if (b?.dataset.provider) localStorage.setItem('vg_ai_provider', b.dataset.provider);
         });
 
-        console.log('[ComfyUI] Bridge ready — Settings wired, Pony + LTX defaults');
+        console.log('[ComfyUI] Bridge ready — separate sprite/video model settings + save status');
     }
 
     if (document.readyState === 'loading') {
