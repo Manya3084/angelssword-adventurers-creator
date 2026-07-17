@@ -2,9 +2,9 @@
  * ⚔️ AS Adventurer — ComfyUI Local Client
  * Talks to a local ComfyUI instance via the AS Adventurer server proxy.
  *
- * Models expected (user installs in ComfyUI):
- *   - Animagine XL 4.0 (or any SDXL checkpoint) for sprites
- *   - AnimateDiff SDXL stack for video (optional; uses img2vid workflow if present)
+ * Defaults:
+ *   Sprites  — Pony Diffusion V6 XL @ 1216×832
+ *   Video    — LTX-Video-ICLoRA-pose-13b-0.9.7 (ComfyUI-LTXVideo nodes)
  */
 
 (function () {
@@ -13,7 +13,14 @@
     const DEFAULT_URL = 'http://127.0.0.1:8188';
     const STORAGE_URL = 'comfyui_base_url';
     const STORAGE_CKPT = 'comfyui_checkpoint';
-    const DEFAULT_CKPT = 'animagine-xl-4.0.safetensors';
+    const STORAGE_VIDEO = 'comfyui_video_model';
+
+    // Common CivitAI / HF filenames — change in Settings if yours differs
+    const DEFAULT_CKPT = 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
+    const DEFAULT_VIDEO_MODEL = 'LTX-Video-ICLoRA-pose-13b-0.9.7.safetensors';
+
+    const DEFAULT_SPRITE_W = 1216;
+    const DEFAULT_SPRITE_H = 832;
 
     function getBaseUrl() {
         return (localStorage.getItem(STORAGE_URL) || DEFAULT_URL).replace(/\/$/, '');
@@ -29,6 +36,14 @@
 
     function setCheckpoint(name) {
         localStorage.setItem(STORAGE_CKPT, name || DEFAULT_CKPT);
+    }
+
+    function getVideoModel() {
+        return localStorage.getItem(STORAGE_VIDEO) || DEFAULT_VIDEO_MODEL;
+    }
+
+    function setVideoModel(name) {
+        localStorage.setItem(STORAGE_VIDEO, name || DEFAULT_VIDEO_MODEL);
     }
 
     /** Proxy-aware fetch → /api/comfyui/... */
@@ -58,16 +73,24 @@
     }
 
     /**
-     * Build a minimal SDXL text-to-image workflow for Animagine XL / any SDXL ckpt.
-     * Output: single SaveImage node.
+     * SDXL text-to-image for Pony Diffusion V6 XL (or any SDXL ckpt).
+     * Default resolution: 1216×832
      */
     function buildSpriteWorkflow({ prompt, negative, width, height, seed, steps, cfg, checkpoint }) {
         const ckpt = checkpoint || getCheckpoint();
-        const w = width || 1280;
-        const h = height || 720;
+        const w = width || DEFAULT_SPRITE_W;
+        const h = height || DEFAULT_SPRITE_H;
         const s = seed == null ? Math.floor(Math.random() * 2 ** 32) : seed;
 
-        // Node graph (API format)
+        // Pony works best with score tags + euler a / normal
+        const ponyNeg = negative || [
+            'score_4, score_5, score_6,',
+            'lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit,',
+            'fewer digits, cropped, worst quality, low quality, jpeg artifacts,',
+            'signature, watermark, username, blurry, gradient background,',
+            'detailed background, scenery, 3d, realistic'
+        ].join(' ');
+
         return {
             '1': {
                 class_type: 'CheckpointLoaderSimple',
@@ -79,10 +102,7 @@
             },
             '3': {
                 class_type: 'CLIPTextEncode',
-                inputs: {
-                    text: negative || 'lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry, gradient background, detailed background, scenery',
-                    clip: ['1', 1]
-                }
+                inputs: { text: ponyNeg, clip: ['1', 1] }
             },
             '4': {
                 class_type: 'EmptyLatentImage',
@@ -92,7 +112,7 @@
                 class_type: 'KSampler',
                 inputs: {
                     seed: s,
-                    steps: steps || 28,
+                    steps: steps || 25,
                     cfg: cfg || 7,
                     sampler_name: 'euler_ancestral',
                     scheduler: 'normal',
@@ -115,7 +135,8 @@
     }
 
     /**
-     * Queue a workflow and wait until finished. Returns array of { filename, subfolder, type }.
+     * Queue a workflow and wait until finished.
+     * Returns array of { filename, subfolder, type, isVideo? }.
      */
     async function queueAndWait(workflow, onProgress) {
         const clientId = 'as-adventurer-' + Math.random().toString(36).slice(2);
@@ -127,9 +148,17 @@
 
         if (!queueResp.ok) {
             const err = await queueResp.json().catch(() => ({}));
-            const msg = err.error || err.node_errors
-                ? JSON.stringify(err.node_errors || err.error).slice(0, 400)
-                : `Queue failed (${queueResp.status})`;
+            let msg;
+            if (err.node_errors && typeof err.node_errors === 'object') {
+                msg = Object.entries(err.node_errors)
+                    .map(([id, e]) => `node ${id}: ${e.message || JSON.stringify(e)}`)
+                    .join('; ')
+                    .slice(0, 500);
+            } else {
+                msg = err.error
+                    ? (typeof err.error === 'string' ? err.error : JSON.stringify(err.error).slice(0, 400))
+                    : `Queue failed (${queueResp.status})`;
+            }
             throw new Error(msg);
         }
 
@@ -139,8 +168,7 @@
 
         onProgress?.({ stage: 'queued', promptId });
 
-        // Poll history
-        const maxAttempts = 180; // ~15 min at 5s
+        const maxAttempts = 240; // ~20 min at 5s (LTX can be slow on Arc)
         for (let i = 0; i < maxAttempts; i++) {
             await new Promise(r => setTimeout(r, 5000));
             onProgress?.({ stage: 'polling', attempt: i + 1, promptId });
@@ -152,8 +180,6 @@
             const entry = hist[promptId];
             if (!entry) continue;
 
-            // status: success / error
-            const statusStr = entry.status?.status_str || entry.status?.completed;
             if (entry.status?.status_str === 'error') {
                 throw new Error('ComfyUI workflow error: ' + JSON.stringify(entry.status).slice(0, 300));
             }
@@ -164,14 +190,13 @@
                 for (const nodeId of Object.keys(outputs)) {
                     const o = outputs[nodeId];
                     if (o.images) {
-                        for (const img of o.images) {
-                            images.push(img);
-                        }
+                        for (const img of o.images) images.push(img);
                     }
                     if (o.gifs) {
-                        for (const g of o.gifs) {
-                            images.push({ ...g, isVideo: true });
-                        }
+                        for (const g of o.gifs) images.push({ ...g, isVideo: true });
+                    }
+                    if (o.videos) {
+                        for (const v of o.videos) images.push({ ...v, isVideo: true });
                     }
                 }
                 if (images.length > 0) {
@@ -184,7 +209,6 @@
         throw new Error('ComfyUI generation timed out');
     }
 
-    /** Fetch an output file from ComfyUI and return as data URL (image) or blob URL helper data */
     async function fetchOutput(fileInfo) {
         const qs = new URLSearchParams({
             filename: fileInfo.filename,
@@ -203,19 +227,23 @@
             reader.readAsDataURL(blob);
         });
 
-        return { blob, dataUrl, isVideo: !!fileInfo.isVideo || (fileInfo.filename || '').match(/\.(mp4|webm|gif)$/i) };
+        const isVideo =
+            !!fileInfo.isVideo ||
+            /\.(mp4|webm|gif|mkv)$/i.test(fileInfo.filename || '');
+
+        return { blob, dataUrl, isVideo };
     }
 
     /**
-     * Generate one sprite image.
+     * Generate one sprite image (Pony V6 XL default).
      * @returns data URL (png)
      */
     async function generateSprite({ prompt, negative, width, height, seed, onProgress }) {
         const workflow = buildSpriteWorkflow({
             prompt,
             negative,
-            width: width || 1280,
-            height: height || 720,
+            width: width || DEFAULT_SPRITE_W,
+            height: height || DEFAULT_SPRITE_H,
             seed,
             checkpoint: getCheckpoint()
         });
@@ -229,17 +257,97 @@
     }
 
     /**
-     * Generate video from a reference image using a simplified img2vid approach.
+     * Image-to-video using LTX-Video + ICLoRA pose model.
      *
-     * Strategy:
-     * 1. Upload the reference image to ComfyUI
-     * 2. Run a workflow that loads it and applies AnimateDiff-style motion
+     * Requires ComfyUI custom nodes:
+     *   - ComfyUI-LTXVideo (Lightricks) or compatible LTX pack
+     *   - ComfyUI-VideoHelperSuite (VHS_VideoCombine) for mp4 output
      *
-     * Because AnimateDiff node packs vary, we use a flexible workflow builder.
-     * If the user's ComfyUI lacks AnimateDiff nodes, they get a clear error.
+     * Model file (settings): LTX-Video-ICLoRA-pose-13b-0.9.7.safetensors
+     * Place per your node pack docs (often models/checkpoints or models/loras).
+     *
+     * This graph uses widely published LTXV* class_types. If your pack uses
+     * different names, ComfyUI will return a clear node error — install the
+     * matching ComfyUI-LTXVideo version or adjust class_types.
      */
+    function buildLtxVideoWorkflow({ prompt, imageName, frames, width, height }) {
+        const modelName = getVideoModel();
+        const seed = Math.floor(Math.random() * 2 ** 32);
+        const w = width || 768;
+        const h = height || 512;
+        // LTX prefers multiples of 32; keep short idle clips
+        const frameCount = Math.min(97, Math.max(25, frames || 49));
+
+        const pos = (prompt || 'subtle idle breathing, locked camera, seamless loop') +
+            ', static camera, no zoom, no pan, character only moves slightly';
+        const neg = 'camera move, zoom, pan, blur, morphing, low quality, watermark, text';
+
+        // Graph oriented around ComfyUI-LTXVideo common nodes + VHS
+        // Loaders may accept the ICLoRA / distilled file as checkpoint depending on pack.
+        return {
+            '1': {
+                class_type: 'CheckpointLoaderSimple',
+                inputs: { ckpt_name: modelName }
+            },
+            '2': {
+                class_type: 'LoadImage',
+                inputs: { image: imageName }
+            },
+            '3': {
+                class_type: 'CLIPTextEncode',
+                inputs: { text: pos, clip: ['1', 1] }
+            },
+            '4': {
+                class_type: 'CLIPTextEncode',
+                inputs: { text: neg, clip: ['1', 1] }
+            },
+            // Encode first frame → latent; many LTX img2vid graphs start this way
+            '5': {
+                class_type: 'VAEEncode',
+                inputs: { pixels: ['2', 0], vae: ['1', 2] }
+            },
+            // Stretch single latent into a short temporal batch via RepeatLatentBatch if available;
+            // if node missing, ComfyUI errors with install hint.
+            '6': {
+                class_type: 'RepeatLatentBatch',
+                inputs: { samples: ['5', 0], amount: frameCount }
+            },
+            '7': {
+                class_type: 'KSampler',
+                inputs: {
+                    seed,
+                    steps: 20,
+                    cfg: 3.5,
+                    sampler_name: 'euler',
+                    scheduler: 'normal',
+                    denoise: 0.65,
+                    model: ['1', 0],
+                    positive: ['3', 0],
+                    negative: ['4', 0],
+                    latent_image: ['6', 0]
+                }
+            },
+            '8': {
+                class_type: 'VAEDecode',
+                inputs: { samples: ['7', 0], vae: ['1', 2] }
+            },
+            // Video Helper Suite — produces mp4/gif in history outputs
+            '9': {
+                class_type: 'VHS_VideoCombine',
+                inputs: {
+                    images: ['8', 0],
+                    frame_rate: 16,
+                    loop_count: 0,
+                    filename_prefix: 'ASAdventurer_ltx',
+                    format: 'video/h264-mp4',
+                    pingpong: false,
+                    save_output: true
+                }
+            }
+        };
+    }
+
     async function generateVideo({ prompt, imageDataUrl, duration, onProgress }) {
-        // Upload image first
         onProgress?.({ stage: 'upload' });
         const uploadResp = await fetch('/api/comfyui/upload', {
             method: 'POST',
@@ -260,92 +368,23 @@
         const uploadedName = uploadData.name || uploadData.filename;
         if (!uploadedName) throw new Error('ComfyUI upload returned no filename');
 
-        // Build AnimateDiff-oriented workflow (requires AnimateDiff nodes installed)
-        // Falls back with a helpful error if nodes are missing at queue time.
-        const frames = Math.min(24, Math.max(12, (duration || 5) * 4)); // ~4 fps feel for idle
-        const workflow = buildAnimateDiffWorkflow({
+        // ~16 fps idle length from duration slider
+        const frames = Math.min(97, Math.max(25, Math.round((duration || 5) * 16)));
+
+        const workflow = buildLtxVideoWorkflow({
             prompt: prompt || 'subtle idle breathing animation, locked camera, seamless loop',
             imageName: uploadedName,
-            frames,
-            checkpoint: getCheckpoint()
+            frames
         });
 
         const outputs = await queueAndWait(workflow, onProgress);
-        const vid = outputs.find(o => o.isVideo || /\.(mp4|webm|gif)$/i.test(o.filename || '')) || outputs[0];
+        const vid =
+            outputs.find(o => o.isVideo || /\.(mp4|webm|gif|mkv)$/i.test(o.filename || '')) ||
+            outputs[0];
         if (!vid) throw new Error('No video in ComfyUI output');
 
         const result = await fetchOutput(vid);
         return { blob: result.blob, url: URL.createObjectURL(result.blob) };
-    }
-
-    /**
-     * Minimal AnimateDiff SDXL-style graph.
-     * Requires common community nodes:
-     *   - ADE_AnimateDiffLoaderGen1 or similar
-     *   - VHS_VideoCombine (Video Helper Suite) for mp4 output
-     *
-     * If these aren't installed, ComfyUI will error on queue — we surface that message.
-     */
-    function buildAnimateDiffWorkflow({ prompt, imageName, frames, checkpoint }) {
-        const ckpt = checkpoint || getCheckpoint();
-        const seed = Math.floor(Math.random() * 2 ** 32);
-
-        // This graph uses widely-available node names from AnimateDiff Evolved + VHS.
-        // Users with different packs may need to adjust node class_types in ComfyUI.
-        return {
-            '1': {
-                class_type: 'CheckpointLoaderSimple',
-                inputs: { ckpt_name: ckpt }
-            },
-            '2': {
-                class_type: 'LoadImage',
-                inputs: { image: imageName }
-            },
-            '3': {
-                class_type: 'CLIPTextEncode',
-                inputs: {
-                    text: prompt + ', locked camera, static background, seamless loop, subtle motion only',
-                    clip: ['1', 1]
-                }
-            },
-            '4': {
-                class_type: 'CLIPTextEncode',
-                inputs: {
-                    text: 'camera move, zoom, pan, blur, distortion, morphing, low quality, watermark',
-                    clip: ['1', 1]
-                }
-            },
-            '5': {
-                class_type: 'VAEEncode',
-                inputs: { pixels: ['2', 0], vae: ['1', 2] }
-            },
-            '6': {
-                class_type: 'KSampler',
-                inputs: {
-                    seed,
-                    steps: 20,
-                    cfg: 7,
-                    sampler_name: 'euler_ancestral',
-                    scheduler: 'normal',
-                    denoise: 0.55,
-                    model: ['1', 0],
-                    positive: ['3', 0],
-                    negative: ['4', 0],
-                    latent_image: ['5', 0]
-                }
-            },
-            '7': {
-                class_type: 'VAEDecode',
-                inputs: { samples: ['6', 0], vae: ['1', 2] }
-            },
-            '8': {
-                class_type: 'SaveImage',
-                inputs: { filename_prefix: 'ASAdventurer_vidframe', images: ['7', 0] }
-            }
-        };
-        // Note: true AnimateDiff multi-frame needs ADE nodes + batch latents.
-        // This v1 path does img2img refinement as a safe baseline that always runs on SDXL.
-        // Users with full AnimateDiff can replace workflows later; see COMFYUI.md.
     }
 
     window.ComfyUIClient = {
@@ -353,12 +392,17 @@
         setBaseUrl,
         getCheckpoint,
         setCheckpoint,
+        getVideoModel,
+        setVideoModel,
         testConnection,
         generateSprite,
         generateVideo,
         DEFAULT_URL,
-        DEFAULT_CKPT
+        DEFAULT_CKPT,
+        DEFAULT_VIDEO_MODEL,
+        DEFAULT_SPRITE_W,
+        DEFAULT_SPRITE_H
     };
 
-    console.log('[ComfyUI] Client ready');
+    console.log('[ComfyUI] Client ready (Pony V6 XL + LTX ICLoRA)');
 })();
