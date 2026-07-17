@@ -2,12 +2,10 @@
  * AS Adventurer — ComfyUI Local Client
  *
  * Sprites  — Pony Diffusion V6 XL @ 1216×832 + optional IP-Adapter
- * Video    — baseline img2vid via SDXL checkpoint + VHS_VideoCombine
+ * Video    — baseline img2vid (low frame count / res for Arc 16GB)
  *
- * NOTE: LTX-Video-ICLoRA-pose-13b is an IC-LoRA, NOT a full checkpoint.
- * CheckpointLoaderSimple only accepts files that appear in
- * ComfyUI/models/checkpoints/. Put a real SDXL (or LTX base) filename
- * in Settings → Video model.
+ * Intel Arc (level_zero) OOMs if RepeatLatentBatch is large — keep frames
+ * and spatial size small for the baseline video path.
  */
 
 (function () {
@@ -22,7 +20,6 @@
     const STORAGE_IP_WEIGHT = 'comfyui_ipadapter_weight';
 
     const DEFAULT_CKPT = 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
-    // Baseline video uses the same class of file as sprites (must be in checkpoints/)
     const DEFAULT_VIDEO_MODEL = 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
     const DEFAULT_IPADAPTER = 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
     const DEFAULT_CLIPVISION = 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors';
@@ -31,8 +28,11 @@
     const DEFAULT_SPRITE_W = 1216;
     const DEFAULT_SPRITE_H = 832;
 
-    // RepeatLatentBatch in stock ComfyUI maxes at 64
-    const MAX_VIDEO_FRAMES = 64;
+    // Arc A770-safe defaults: batch of SDXL latents is expensive
+    const MAX_VIDEO_FRAMES = 12;
+    const VIDEO_WIDTH = 768;
+    const VIDEO_HEIGHT = 512;
+    const VIDEO_FPS = 8;
 
     function getBaseUrl() {
         return (localStorage.getItem(STORAGE_URL) || DEFAULT_URL).replace(/\/$/, '');
@@ -48,9 +48,8 @@
     }
     function getVideoModel() {
         var v = localStorage.getItem(STORAGE_VIDEO) || DEFAULT_VIDEO_MODEL;
-        // Migrate old invalid default that is an IC-LoRA, not a checkpoint
         if (/LTX-Video-ICLoRA/i.test(v)) {
-            console.warn('[ComfyUI] Video model was set to an IC-LoRA filename; using sprite checkpoint instead. Set a real checkpoints/ file in Settings.');
+            console.warn('[ComfyUI] Video model was IC-LoRA; using sprite checkpoint instead');
             return getCheckpoint();
         }
         return v;
@@ -108,10 +107,8 @@
         return resp.json();
     }
 
-    /** List checkpoint filenames ComfyUI can load (best-effort). */
     async function listCheckpoints() {
         try {
-            // ComfyUI exposes model lists at /models/{folder}
             var resp = await comfyFetch('/models/checkpoints');
             if (!resp.ok) return [];
             var data = await resp.json();
@@ -200,12 +197,12 @@
                     if (type === 'value_not_in_list' && /ckpt_name/i.test(details)) {
                         return (
                             'Checkpoint not found: ' + details +
-                            '. Open Settings → ComfyUI → Video model and pick an exact filename from ComfyUI/models/checkpoints/ ' +
-                            '(LTX-Video-ICLoRA-* is a LoRA, not a checkpoint — use a real SDXL/LTX base .safetensors instead, e.g. your Pony file).'
+                            '. Settings → Video model must be an exact file from ComfyUI/models/checkpoints/ ' +
+                            '(not an IC-LoRA). Use your Pony .safetensors name.'
                         );
                     }
                     if (type === 'value_bigger_than_max') {
-                        return details + ' (capped internally on next run)';
+                        return details + ' (reduce frames)';
                     }
                     return details || item.message || JSON.stringify(item);
                 });
@@ -321,7 +318,15 @@
             if (!entry) continue;
 
             if (entry.status && entry.status.status_str === 'error') {
-                throw new Error('ComfyUI workflow error: ' + JSON.stringify(entry.status).slice(0, 300));
+                var st = JSON.stringify(entry.status);
+                if (/OUT_OF_HOST_MEMORY|out of memory|OOM/i.test(st)) {
+                    throw new Error(
+                        'ComfyUI ran out of memory (Arc/Level Zero). ' +
+                        'Video path uses fewer frames at 768×512 — pull latest client. ' +
+                        'Also try restarting ComfyUI to clear VRAM, close other GPU apps.'
+                    );
+                }
+                throw new Error('ComfyUI workflow error: ' + st.slice(0, 300));
             }
 
             var outputs = entry.outputs;
@@ -407,43 +412,65 @@
     }
 
     /**
-     * Baseline image-to-video:
-     * encode ref → repeat latent frames (max 64) → light img2img → VHS mp4.
-     * Requires a real checkpoint filename + Video Helper Suite.
+     * Baseline image-to-video tuned for Intel Arc 16GB:
+     *   - downscale to 768×512 before VAE encode
+     *   - max 12 frames (~1.5s at 8fps) so batch latents fit
+     *   - fewer steps, modest denoise
      */
     function buildBaselineVideoWorkflow(opts) {
         var modelName = opts.modelName || getVideoModel();
         var seed = Math.floor(Math.random() * Math.pow(2, 32));
-        // Hard cap at RepeatLatentBatch max
-        var frameCount = Math.min(MAX_VIDEO_FRAMES, Math.max(16, opts.frames || 48));
+        var frameCount = Math.min(MAX_VIDEO_FRAMES, Math.max(8, opts.frames || 12));
 
         var pos = (opts.prompt || 'subtle idle breathing, locked camera, seamless loop') +
-            ', static camera, no zoom, no pan, character only moves slightly, anime style';
+            ', static camera, no zoom, no pan, subtle motion, anime style';
         var neg = 'camera move, zoom, pan, blur, morphing, low quality, watermark, text, photorealistic';
 
-        console.log('[ComfyUI] Video checkpoint:', modelName, '| frames:', frameCount);
+        console.log(
+            '[ComfyUI] Video checkpoint:', modelName,
+            '| frames:', frameCount,
+            '| size:', VIDEO_WIDTH + 'x' + VIDEO_HEIGHT
+        );
 
         return {
             '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: modelName } },
             '2': { class_type: 'LoadImage', inputs: { image: opts.imageName } },
-            '3': { class_type: 'CLIPTextEncode', inputs: { text: pos, clip: ['1', 1] } },
-            '4': { class_type: 'CLIPTextEncode', inputs: { text: neg, clip: ['1', 1] } },
-            '5': { class_type: 'VAEEncode', inputs: { pixels: ['2', 0], vae: ['1', 2] } },
-            '6': { class_type: 'RepeatLatentBatch', inputs: { samples: ['5', 0], amount: frameCount } },
-            '7': {
-                class_type: 'KSampler',
+            // Downscale before encode — huge memory saver vs 1216×832 × N frames
+            '3': {
+                class_type: 'ImageScale',
                 inputs: {
-                    seed: seed, steps: 20, cfg: 3.5,
-                    sampler_name: 'euler', scheduler: 'normal', denoise: 0.45,
-                    model: ['1', 0], positive: ['3', 0], negative: ['4', 0], latent_image: ['6', 0]
+                    image: ['2', 0],
+                    upscale_method: 'bilinear',
+                    width: VIDEO_WIDTH,
+                    height: VIDEO_HEIGHT,
+                    crop: 'center'
                 }
             },
-            '8': { class_type: 'VAEDecode', inputs: { samples: ['7', 0], vae: ['1', 2] } },
-            '9': {
+            '4': { class_type: 'CLIPTextEncode', inputs: { text: pos, clip: ['1', 1] } },
+            '5': { class_type: 'CLIPTextEncode', inputs: { text: neg, clip: ['1', 1] } },
+            '6': { class_type: 'VAEEncode', inputs: { pixels: ['3', 0], vae: ['1', 2] } },
+            '7': { class_type: 'RepeatLatentBatch', inputs: { samples: ['6', 0], amount: frameCount } },
+            '8': {
+                class_type: 'KSampler',
+                inputs: {
+                    seed: seed,
+                    steps: 12,
+                    cfg: 3.0,
+                    sampler_name: 'euler',
+                    scheduler: 'normal',
+                    denoise: 0.35,
+                    model: ['1', 0],
+                    positive: ['4', 0],
+                    negative: ['5', 0],
+                    latent_image: ['7', 0]
+                }
+            },
+            '9': { class_type: 'VAEDecode', inputs: { samples: ['8', 0], vae: ['1', 2] } },
+            '10': {
                 class_type: 'VHS_VideoCombine',
                 inputs: {
-                    images: ['8', 0],
-                    frame_rate: 12,
+                    images: ['9', 0],
+                    frame_rate: VIDEO_FPS,
                     loop_count: 0,
                     filename_prefix: 'ASAdventurer_vid',
                     format: 'video/h264-mp4',
@@ -460,7 +487,6 @@
         onProgress && onProgress({ stage: 'upload' });
 
         var modelName = getVideoModel();
-        // Guard: never send known IC-LoRA names into CheckpointLoaderSimple
         if (/ICLoRA|ic-lora/i.test(modelName)) {
             modelName = getCheckpoint();
             console.warn('[ComfyUI] Rejected IC-LoRA as video checkpoint; using', modelName);
@@ -468,11 +494,8 @@
 
         var uploadedName = await uploadImage(opts.imageDataUrl, 'as_vid_ref_' + Date.now() + '.png');
 
-        // ~12 fps, hard-capped at 64 frames (RepeatLatentBatch limit)
-        var frames = Math.min(
-            MAX_VIDEO_FRAMES,
-            Math.max(16, Math.round((opts.duration || 5) * 12))
-        );
+        // Ignore long duration for memory — short idle loop only
+        var frames = Math.min(MAX_VIDEO_FRAMES, Math.max(8, Math.round(Math.min(opts.duration || 2, 2) * VIDEO_FPS)));
 
         var workflow = buildBaselineVideoWorkflow({
             prompt: opts.prompt || 'subtle idle breathing animation, locked camera, seamless loop',
@@ -481,7 +504,22 @@
             modelName: modelName
         });
 
-        var outputs = await queueAndWait(workflow, onProgress);
+        try {
+            var outputs = await queueAndWait(workflow, onProgress);
+        } catch (e) {
+            var m = String(e && e.message || e);
+            if (/OUT_OF_HOST_MEMORY|out of memory|OOM|level_zero/i.test(m)) {
+                throw new Error(
+                    'Out of memory on Intel Arc while generating video. ' +
+                    'Restart ComfyUI to free VRAM, then retry. ' +
+                    'Baseline video is limited to ' + MAX_VIDEO_FRAMES + ' frames @ ' +
+                    VIDEO_WIDTH + 'x' + VIDEO_HEIGHT + '. ' +
+                    'Original error: ' + m.slice(0, 200)
+                );
+            }
+            throw e;
+        }
+
         var vid = outputs.find(function (o) {
             return o.isVideo || /\.(mp4|webm|gif|mkv)$/i.test(o.filename || '');
         }) || outputs[0];
@@ -518,5 +556,5 @@
         MAX_VIDEO_FRAMES: MAX_VIDEO_FRAMES
     };
 
-    console.log('[ComfyUI] Client ready (Pony + IP-Adapter + baseline video)');
+    console.log('[ComfyUI] Client ready (Pony + IP-Adapter + Arc-safe video)');
 })();
