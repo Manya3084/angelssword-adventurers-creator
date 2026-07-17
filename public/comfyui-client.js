@@ -1,9 +1,13 @@
 /**
  * AS Adventurer — ComfyUI Local Client
  *
- * Sprites  — Pony Diffusion V6 XL @ 1216×832
- *            + optional IP-Adapter (character identity, style-preserving defaults)
- * Video    — LTX-Video-ICLoRA-pose-13b-0.9.7
+ * Sprites  — Pony Diffusion V6 XL @ 1216×832 + optional IP-Adapter
+ * Video    — baseline img2vid via SDXL checkpoint + VHS_VideoCombine
+ *
+ * NOTE: LTX-Video-ICLoRA-pose-13b is an IC-LoRA, NOT a full checkpoint.
+ * CheckpointLoaderSimple only accepts files that appear in
+ * ComfyUI/models/checkpoints/. Put a real SDXL (or LTX base) filename
+ * in Settings → Video model.
  */
 
 (function () {
@@ -18,14 +22,17 @@
     const STORAGE_IP_WEIGHT = 'comfyui_ipadapter_weight';
 
     const DEFAULT_CKPT = 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
-    const DEFAULT_VIDEO_MODEL = 'LTX-Video-ICLoRA-pose-13b-0.9.7.safetensors';
+    // Baseline video uses the same class of file as sprites (must be in checkpoints/)
+    const DEFAULT_VIDEO_MODEL = 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
     const DEFAULT_IPADAPTER = 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
     const DEFAULT_CLIPVISION = 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors';
-    // Lower default so Pony anime style wins; raise in Settings for stronger likeness
     const DEFAULT_IP_WEIGHT = 0.55;
 
     const DEFAULT_SPRITE_W = 1216;
     const DEFAULT_SPRITE_H = 832;
+
+    // RepeatLatentBatch in stock ComfyUI maxes at 64
+    const MAX_VIDEO_FRAMES = 64;
 
     function getBaseUrl() {
         return (localStorage.getItem(STORAGE_URL) || DEFAULT_URL).replace(/\/$/, '');
@@ -40,7 +47,13 @@
         localStorage.setItem(STORAGE_CKPT, name || DEFAULT_CKPT);
     }
     function getVideoModel() {
-        return localStorage.getItem(STORAGE_VIDEO) || DEFAULT_VIDEO_MODEL;
+        var v = localStorage.getItem(STORAGE_VIDEO) || DEFAULT_VIDEO_MODEL;
+        // Migrate old invalid default that is an IC-LoRA, not a checkpoint
+        if (/LTX-Video-ICLoRA/i.test(v)) {
+            console.warn('[ComfyUI] Video model was set to an IC-LoRA filename; using sprite checkpoint instead. Set a real checkpoints/ file in Settings.');
+            return getCheckpoint();
+        }
+        return v;
     }
     function setVideoModel(name) {
         localStorage.setItem(STORAGE_VIDEO, name || DEFAULT_VIDEO_MODEL);
@@ -70,13 +83,14 @@
         );
     }
 
-    async function comfyFetch(path, options = {}) {
+    async function comfyFetch(path, options) {
+        options = options || {};
         const resp = await fetch('/api/comfyui/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 baseUrl: getBaseUrl(),
-                path,
+                path: path,
                 method: options.method || 'GET',
                 body: options.body || null,
                 isBinary: !!options.isBinary
@@ -88,16 +102,25 @@
     async function testConnection() {
         const resp = await comfyFetch('/system_stats');
         if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            throw new Error(err.error || `ComfyUI unreachable (${resp.status})`);
+            const err = await resp.json().catch(function () { return {}; });
+            throw new Error(err.error || 'ComfyUI unreachable (' + resp.status + ')');
         }
         return resp.json();
     }
 
-    /**
-     * Center-crop to square then resize — avoids CLIP center-crop surprises
-     * and the non-square IP-Adapter warning.
-     */
+    /** List checkpoint filenames ComfyUI can load (best-effort). */
+    async function listCheckpoints() {
+        try {
+            // ComfyUI exposes model lists at /models/{folder}
+            var resp = await comfyFetch('/models/checkpoints');
+            if (!resp.ok) return [];
+            var data = await resp.json();
+            return Array.isArray(data) ? data : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
     function squareCropDataUrl(dataUrl, size) {
         size = size || 512;
         return new Promise(function (resolve, reject) {
@@ -129,7 +152,7 @@
             })
         });
         if (!uploadResp.ok) {
-            const err = await uploadResp.json().catch(() => ({}));
+            const err = await uploadResp.json().catch(function () { return {}; });
             throw new Error(err.error || 'Failed to upload image to ComfyUI');
         }
         const data = await uploadResp.json();
@@ -147,7 +170,6 @@
             'signature, watermark, username, blurry, gradient background,',
             'detailed background, scenery'
         ];
-        // Push hard away from photo style when IP-Adapter might pull realism from the ref
         if (forIpAdapter) {
             base.push(
                 'photorealistic, realistic, photo, 3d, cgi, western comic,',
@@ -159,104 +181,83 @@
         return base.join(' ');
     }
 
-    function buildSpriteWorkflowT2I({ prompt, negative, width, height, seed, steps, cfg, checkpoint }) {
-        const ckpt = checkpoint || getCheckpoint();
-        const w = width || DEFAULT_SPRITE_W;
-        const h = height || DEFAULT_SPRITE_H;
-        const s = seed == null ? Math.floor(Math.random() * 2 ** 32) : seed;
+    function formatNodeErrors(err) {
+        if (!err || !err.node_errors || typeof err.node_errors !== 'object') {
+            if (err && err.error) {
+                return typeof err.error === 'string' ? err.error : JSON.stringify(err.error).slice(0, 400);
+            }
+            return null;
+        }
+
+        return Object.entries(err.node_errors)
+            .map(function (entry) {
+                var id = entry[0];
+                var e = entry[1];
+                var errors = e.errors || [];
+                var parts = errors.map(function (item) {
+                    var type = item.type || '';
+                    var details = item.details || item.message || '';
+                    if (type === 'value_not_in_list' && /ckpt_name/i.test(details)) {
+                        return (
+                            'Checkpoint not found: ' + details +
+                            '. Open Settings → ComfyUI → Video model and pick an exact filename from ComfyUI/models/checkpoints/ ' +
+                            '(LTX-Video-ICLoRA-* is a LoRA, not a checkpoint — use a real SDXL/LTX base .safetensors instead, e.g. your Pony file).'
+                        );
+                    }
+                    if (type === 'value_bigger_than_max') {
+                        return details + ' (capped internally on next run)';
+                    }
+                    return details || item.message || JSON.stringify(item);
+                });
+                if (!parts.length) {
+                    parts.push(e.message || e.exception_message || JSON.stringify(e).slice(0, 200));
+                }
+                return 'node ' + id + ': ' + parts.join(' | ');
+            })
+            .join('; ')
+            .slice(0, 800);
+    }
+
+    function buildSpriteWorkflowT2I(opts) {
+        var ckpt = opts.checkpoint || getCheckpoint();
+        var w = opts.width || DEFAULT_SPRITE_W;
+        var h = opts.height || DEFAULT_SPRITE_H;
+        var s = opts.seed == null ? Math.floor(Math.random() * Math.pow(2, 32)) : opts.seed;
 
         console.log('[ComfyUI] T2I checkpoint:', ckpt, w + 'x' + h);
 
         return {
-            '1': {
-                class_type: 'CheckpointLoaderSimple',
-                inputs: { ckpt_name: ckpt }
-            },
-            '2': {
-                class_type: 'CLIPTextEncode',
-                inputs: { text: prompt, clip: ['1', 1] }
-            },
-            '3': {
-                class_type: 'CLIPTextEncode',
-                inputs: { text: ponyNegative(negative, false), clip: ['1', 1] }
-            },
-            '4': {
-                class_type: 'EmptyLatentImage',
-                inputs: { width: w, height: h, batch_size: 1 }
-            },
+            '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+            '2': { class_type: 'CLIPTextEncode', inputs: { text: opts.prompt, clip: ['1', 1] } },
+            '3': { class_type: 'CLIPTextEncode', inputs: { text: ponyNegative(opts.negative, false), clip: ['1', 1] } },
+            '4': { class_type: 'EmptyLatentImage', inputs: { width: w, height: h, batch_size: 1 } },
             '5': {
                 class_type: 'KSampler',
                 inputs: {
-                    seed: s,
-                    steps: steps || 25,
-                    cfg: cfg || 7,
-                    sampler_name: 'euler_ancestral',
-                    scheduler: 'normal',
-                    denoise: 1,
-                    model: ['1', 0],
-                    positive: ['2', 0],
-                    negative: ['3', 0],
-                    latent_image: ['4', 0]
+                    seed: s, steps: opts.steps || 25, cfg: opts.cfg || 7,
+                    sampler_name: 'euler_ancestral', scheduler: 'normal', denoise: 1,
+                    model: ['1', 0], positive: ['2', 0], negative: ['3', 0], latent_image: ['4', 0]
                 }
             },
-            '6': {
-                class_type: 'VAEDecode',
-                inputs: { samples: ['5', 0], vae: ['1', 2] }
-            },
-            '7': {
-                class_type: 'SaveImage',
-                inputs: { filename_prefix: 'ASAdventurer_sprite', images: ['6', 0] }
-            }
+            '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
+            '7': { class_type: 'SaveImage', inputs: { filename_prefix: 'ASAdventurer_sprite', images: ['6', 0] } }
         };
     }
 
-    /**
-     * IP-Adapter + Pony — identity early, Pony style late.
-     * end_at < 1 lets the checkpoint finish the anime look without the ref overpowering it.
-     */
-    function buildSpriteWorkflowIPAdapter({
-        prompt,
-        negative,
-        width,
-        height,
-        seed,
-        steps,
-        cfg,
-        checkpoint,
-        imageName,
-        ipWeight
-    }) {
-        const ckpt = checkpoint || getCheckpoint();
-        const w = width || DEFAULT_SPRITE_W;
-        const h = height || DEFAULT_SPRITE_H;
-        const s = seed == null ? Math.floor(Math.random() * 2 ** 32) : seed;
-        const weight = ipWeight == null ? getIpAdapterWeight() : ipWeight;
+    function buildSpriteWorkflowIPAdapter(opts) {
+        var ckpt = opts.checkpoint || getCheckpoint();
+        var w = opts.width || DEFAULT_SPRITE_W;
+        var h = opts.height || DEFAULT_SPRITE_H;
+        var s = opts.seed == null ? Math.floor(Math.random() * Math.pow(2, 32)) : opts.seed;
+        var weight = opts.ipWeight == null ? getIpAdapterWeight() : opts.ipWeight;
 
-        console.log(
-            '[ComfyUI] IP-Adapter checkpoint:', ckpt,
-            '| ipadapter:', getIpAdapterModel(),
-            '| weight:', weight,
-            '| end_at: 0.65'
-        );
+        console.log('[ComfyUI] IP-Adapter checkpoint:', ckpt, '| weight:', weight);
 
         return {
-            '1': {
-                class_type: 'CheckpointLoaderSimple',
-                inputs: { ckpt_name: ckpt }
-            },
-            '2': {
-                class_type: 'LoadImage',
-                inputs: { image: imageName }
-            },
-            '3': {
-                class_type: 'IPAdapterModelLoader',
-                inputs: { ipadapter_file: getIpAdapterModel() }
-            },
-            '4': {
-                class_type: 'CLIPVisionLoader',
-                inputs: { clip_name: getClipVisionModel() }
-            },
-            // Identity early (0–65% of steps), then pure Pony finishes the style
+            '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+            '2': { class_type: 'LoadImage', inputs: { image: opts.imageName } },
+            '3': { class_type: 'IPAdapterModelLoader', inputs: { ipadapter_file: getIpAdapterModel() } },
+            '4': { class_type: 'CLIPVisionLoader', inputs: { clip_name: getClipVisionModel() } },
             '5': {
                 class_type: 'IPAdapterAdvanced',
                 inputs: {
@@ -272,111 +273,66 @@
                     embeds_scaling: 'V only'
                 }
             },
-            '6': {
-                class_type: 'CLIPTextEncode',
-                inputs: { text: prompt, clip: ['1', 1] }
-            },
-            '7': {
-                class_type: 'CLIPTextEncode',
-                inputs: { text: ponyNegative(negative, true), clip: ['1', 1] }
-            },
-            '8': {
-                class_type: 'EmptyLatentImage',
-                inputs: { width: w, height: h, batch_size: 1 }
-            },
+            '6': { class_type: 'CLIPTextEncode', inputs: { text: opts.prompt, clip: ['1', 1] } },
+            '7': { class_type: 'CLIPTextEncode', inputs: { text: ponyNegative(opts.negative, true), clip: ['1', 1] } },
+            '8': { class_type: 'EmptyLatentImage', inputs: { width: w, height: h, batch_size: 1 } },
             '9': {
                 class_type: 'KSampler',
                 inputs: {
-                    seed: s,
-                    steps: steps || 28,
-                    cfg: cfg || 7.5,
-                    sampler_name: 'euler_ancestral',
-                    scheduler: 'normal',
-                    denoise: 1,
-                    model: ['5', 0],
-                    positive: ['6', 0],
-                    negative: ['7', 0],
-                    latent_image: ['8', 0]
+                    seed: s, steps: opts.steps || 28, cfg: opts.cfg || 7.5,
+                    sampler_name: 'euler_ancestral', scheduler: 'normal', denoise: 1,
+                    model: ['5', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['8', 0]
                 }
             },
-            '10': {
-                class_type: 'VAEDecode',
-                inputs: { samples: ['9', 0], vae: ['1', 2] }
-            },
-            '11': {
-                class_type: 'SaveImage',
-                inputs: { filename_prefix: 'ASAdventurer_sprite_ipa', images: ['10', 0] }
-            }
+            '10': { class_type: 'VAEDecode', inputs: { samples: ['9', 0], vae: ['1', 2] } },
+            '11': { class_type: 'SaveImage', inputs: { filename_prefix: 'ASAdventurer_sprite_ipa', images: ['10', 0] } }
         };
     }
 
     async function queueAndWait(workflow, onProgress) {
-        const clientId = 'as-adventurer-' + Math.random().toString(36).slice(2);
+        var clientId = 'as-adventurer-' + Math.random().toString(36).slice(2);
 
-        const queueResp = await comfyFetch('/prompt', {
+        var queueResp = await comfyFetch('/prompt', {
             method: 'POST',
             body: { prompt: workflow, client_id: clientId }
         });
 
         if (!queueResp.ok) {
-            const err = await queueResp.json().catch(() => ({}));
-            let msg;
-            if (err.node_errors && typeof err.node_errors === 'object') {
-                msg = Object.entries(err.node_errors)
-                    .map(([id, e]) => {
-                        const m = e.message || e.exception_message || JSON.stringify(e);
-                        if (/IPAdapter|CLIPVision/i.test(m) || /node.*not found/i.test(m)) {
-                            return 'node ' + id + ': ' + m +
-                                ' — install ComfyUI_IPAdapter_plus and place SDXL IP-Adapter + CLIP Vision weights';
-                        }
-                        // weight_type enum mismatch — fall back hint
-                        if (/weight_type|ease out|invalid/i.test(m)) {
-                            return 'node ' + id + ': ' + m +
-                                ' — update ComfyUI_IPAdapter_plus or change weight_type';
-                        }
-                        return 'node ' + id + ': ' + m;
-                    })
-                    .join('; ')
-                    .slice(0, 600);
-            } else {
-                msg = err.error
-                    ? (typeof err.error === 'string' ? err.error : JSON.stringify(err.error).slice(0, 400))
-                    : 'Queue failed (' + queueResp.status + ')';
-            }
+            var err = await queueResp.json().catch(function () { return {}; });
+            var msg = formatNodeErrors(err) || ('Queue failed (' + queueResp.status + ')');
             throw new Error(msg);
         }
 
-        const queueData = await queueResp.json();
-        const promptId = queueData.prompt_id;
+        var queueData = await queueResp.json();
+        var promptId = queueData.prompt_id;
         if (!promptId) throw new Error('No prompt_id from ComfyUI');
 
         onProgress && onProgress({ stage: 'queued', promptId: promptId });
 
-        const maxAttempts = 240;
-        for (let i = 0; i < maxAttempts; i++) {
+        for (var i = 0; i < 240; i++) {
             await new Promise(function (r) { setTimeout(r, 5000); });
             onProgress && onProgress({ stage: 'polling', attempt: i + 1, promptId: promptId });
 
-            const histResp = await comfyFetch('/history/' + promptId);
+            var histResp = await comfyFetch('/history/' + promptId);
             if (!histResp.ok) continue;
 
-            const hist = await histResp.json();
-            const entry = hist[promptId];
+            var hist = await histResp.json();
+            var entry = hist[promptId];
             if (!entry) continue;
 
             if (entry.status && entry.status.status_str === 'error') {
                 throw new Error('ComfyUI workflow error: ' + JSON.stringify(entry.status).slice(0, 300));
             }
 
-            const outputs = entry.outputs;
+            var outputs = entry.outputs;
             if (outputs) {
-                const images = [];
-                for (const nodeId of Object.keys(outputs)) {
-                    const o = outputs[nodeId];
-                    if (o.images) for (const img of o.images) images.push(img);
-                    if (o.gifs) for (const g of o.gifs) images.push(Object.assign({}, g, { isVideo: true }));
-                    if (o.videos) for (const v of o.videos) images.push(Object.assign({}, v, { isVideo: true }));
-                }
+                var images = [];
+                Object.keys(outputs).forEach(function (nodeId) {
+                    var o = outputs[nodeId];
+                    if (o.images) o.images.forEach(function (img) { images.push(img); });
+                    if (o.gifs) o.gifs.forEach(function (g) { images.push(Object.assign({}, g, { isVideo: true })); });
+                    if (o.videos) o.videos.forEach(function (v) { images.push(Object.assign({}, v, { isVideo: true })); });
+                });
                 if (images.length > 0) {
                     onProgress && onProgress({ stage: 'done', count: images.length });
                     return images;
@@ -388,24 +344,24 @@
     }
 
     async function fetchOutput(fileInfo) {
-        const qs = new URLSearchParams({
+        var qs = new URLSearchParams({
             filename: fileInfo.filename,
             subfolder: fileInfo.subfolder || '',
             type: fileInfo.type || 'output'
         });
 
-        const resp = await comfyFetch('/view?' + qs.toString(), { isBinary: true });
+        var resp = await comfyFetch('/view?' + qs.toString(), { isBinary: true });
         if (!resp.ok) throw new Error('Failed to fetch ComfyUI output: ' + resp.status);
 
-        const blob = await resp.blob();
-        const dataUrl = await new Promise(function (resolve, reject) {
-            const reader = new FileReader();
+        var blob = await resp.blob();
+        var dataUrl = await new Promise(function (resolve, reject) {
+            var reader = new FileReader();
             reader.onload = function () { resolve(reader.result); };
             reader.onerror = reject;
             reader.readAsDataURL(blob);
         });
 
-        const isVideo =
+        var isVideo =
             !!fileInfo.isVideo ||
             /\.(mp4|webm|gif|mkv)$/i.test(fileInfo.filename || '');
 
@@ -414,69 +370,62 @@
 
     async function generateSprite(opts) {
         opts = opts || {};
-        var prompt = opts.prompt;
-        var negative = opts.negative;
-        var width = opts.width;
-        var height = opts.height;
-        var seed = opts.seed;
-        var referenceImageDataUrl = opts.referenceImageDataUrl;
-        var ipWeight = opts.ipWeight;
-        var onProgress = opts.onProgress;
-
-        var workflow;
         var ckpt = getCheckpoint();
+        var workflow;
 
-        if (referenceImageDataUrl) {
-            onProgress && onProgress({ stage: 'upload', checkpoint: ckpt });
-            // Square crop so CLIP doesn't random-center-crop a wide sprite sheet
-            var squared = await squareCropDataUrl(referenceImageDataUrl, 512);
+        if (opts.referenceImageDataUrl) {
+            opts.onProgress && opts.onProgress({ stage: 'upload', checkpoint: ckpt });
+            var squared = await squareCropDataUrl(opts.referenceImageDataUrl, 512);
             var imageName = await uploadImage(squared, 'as_char_ref_' + Date.now() + '.png');
-            onProgress && onProgress({ stage: 'ipadapter', imageName: imageName, checkpoint: ckpt });
+            opts.onProgress && opts.onProgress({ stage: 'ipadapter', imageName: imageName, checkpoint: ckpt });
             workflow = buildSpriteWorkflowIPAdapter({
-                prompt: prompt,
-                negative: negative,
-                width: width || DEFAULT_SPRITE_W,
-                height: height || DEFAULT_SPRITE_H,
-                seed: seed,
+                prompt: opts.prompt,
+                negative: opts.negative,
+                width: opts.width || DEFAULT_SPRITE_W,
+                height: opts.height || DEFAULT_SPRITE_H,
+                seed: opts.seed,
                 checkpoint: ckpt,
                 imageName: imageName,
-                ipWeight: ipWeight
+                ipWeight: opts.ipWeight
             });
         } else {
-            onProgress && onProgress({ stage: 't2i', checkpoint: ckpt });
+            opts.onProgress && opts.onProgress({ stage: 't2i', checkpoint: ckpt });
             workflow = buildSpriteWorkflowT2I({
-                prompt: prompt,
-                negative: negative,
-                width: width || DEFAULT_SPRITE_W,
-                height: height || DEFAULT_SPRITE_H,
-                seed: seed,
+                prompt: opts.prompt,
+                negative: opts.negative,
+                width: opts.width || DEFAULT_SPRITE_W,
+                height: opts.height || DEFAULT_SPRITE_H,
+                seed: opts.seed,
                 checkpoint: ckpt
             });
         }
 
-        var outputs = await queueAndWait(workflow, onProgress);
+        var outputs = await queueAndWait(workflow, opts.onProgress);
         var img = outputs.find(function (o) { return !o.isVideo; }) || outputs[0];
         if (!img) throw new Error('No image in ComfyUI output');
-
-        var result = await fetchOutput(img);
-        return result.dataUrl;
+        return (await fetchOutput(img)).dataUrl;
     }
 
-    function buildLtxVideoWorkflow(opts) {
-        var prompt = opts.prompt;
-        var imageName = opts.imageName;
-        var frames = opts.frames;
-        var modelName = getVideoModel();
+    /**
+     * Baseline image-to-video:
+     * encode ref → repeat latent frames (max 64) → light img2img → VHS mp4.
+     * Requires a real checkpoint filename + Video Helper Suite.
+     */
+    function buildBaselineVideoWorkflow(opts) {
+        var modelName = opts.modelName || getVideoModel();
         var seed = Math.floor(Math.random() * Math.pow(2, 32));
-        var frameCount = Math.min(97, Math.max(25, frames || 49));
+        // Hard cap at RepeatLatentBatch max
+        var frameCount = Math.min(MAX_VIDEO_FRAMES, Math.max(16, opts.frames || 48));
 
-        var pos = (prompt || 'subtle idle breathing, locked camera, seamless loop') +
-            ', static camera, no zoom, no pan, character only moves slightly';
-        var neg = 'camera move, zoom, pan, blur, morphing, low quality, watermark, text';
+        var pos = (opts.prompt || 'subtle idle breathing, locked camera, seamless loop') +
+            ', static camera, no zoom, no pan, character only moves slightly, anime style';
+        var neg = 'camera move, zoom, pan, blur, morphing, low quality, watermark, text, photorealistic';
+
+        console.log('[ComfyUI] Video checkpoint:', modelName, '| frames:', frameCount);
 
         return {
             '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: modelName } },
-            '2': { class_type: 'LoadImage', inputs: { image: imageName } },
+            '2': { class_type: 'LoadImage', inputs: { image: opts.imageName } },
             '3': { class_type: 'CLIPTextEncode', inputs: { text: pos, clip: ['1', 1] } },
             '4': { class_type: 'CLIPTextEncode', inputs: { text: neg, clip: ['1', 1] } },
             '5': { class_type: 'VAEEncode', inputs: { pixels: ['2', 0], vae: ['1', 2] } },
@@ -485,7 +434,7 @@
                 class_type: 'KSampler',
                 inputs: {
                     seed: seed, steps: 20, cfg: 3.5,
-                    sampler_name: 'euler', scheduler: 'normal', denoise: 0.65,
+                    sampler_name: 'euler', scheduler: 'normal', denoise: 0.45,
                     model: ['1', 0], positive: ['3', 0], negative: ['4', 0], latent_image: ['6', 0]
                 }
             },
@@ -493,9 +442,13 @@
             '9': {
                 class_type: 'VHS_VideoCombine',
                 inputs: {
-                    images: ['8', 0], frame_rate: 16, loop_count: 0,
-                    filename_prefix: 'ASAdventurer_ltx', format: 'video/h264-mp4',
-                    pingpong: false, save_output: true
+                    images: ['8', 0],
+                    frame_rate: 12,
+                    loop_count: 0,
+                    filename_prefix: 'ASAdventurer_vid',
+                    format: 'video/h264-mp4',
+                    pingpong: false,
+                    save_output: true
                 }
             }
         };
@@ -505,13 +458,29 @@
         opts = opts || {};
         var onProgress = opts.onProgress;
         onProgress && onProgress({ stage: 'upload' });
+
+        var modelName = getVideoModel();
+        // Guard: never send known IC-LoRA names into CheckpointLoaderSimple
+        if (/ICLoRA|ic-lora/i.test(modelName)) {
+            modelName = getCheckpoint();
+            console.warn('[ComfyUI] Rejected IC-LoRA as video checkpoint; using', modelName);
+        }
+
         var uploadedName = await uploadImage(opts.imageDataUrl, 'as_vid_ref_' + Date.now() + '.png');
-        var frames = Math.min(97, Math.max(25, Math.round((opts.duration || 5) * 16)));
-        var workflow = buildLtxVideoWorkflow({
+
+        // ~12 fps, hard-capped at 64 frames (RepeatLatentBatch limit)
+        var frames = Math.min(
+            MAX_VIDEO_FRAMES,
+            Math.max(16, Math.round((opts.duration || 5) * 12))
+        );
+
+        var workflow = buildBaselineVideoWorkflow({
             prompt: opts.prompt || 'subtle idle breathing animation, locked camera, seamless loop',
             imageName: uploadedName,
-            frames: frames
+            frames: frames,
+            modelName: modelName
         });
+
         var outputs = await queueAndWait(workflow, onProgress);
         var vid = outputs.find(function (o) {
             return o.isVideo || /\.(mp4|webm|gif|mkv)$/i.test(o.filename || '');
@@ -535,6 +504,7 @@
         getIpAdapterWeight: getIpAdapterWeight,
         setIpAdapterWeight: setIpAdapterWeight,
         testConnection: testConnection,
+        listCheckpoints: listCheckpoints,
         generateSprite: generateSprite,
         generateVideo: generateVideo,
         DEFAULT_URL: DEFAULT_URL,
@@ -544,8 +514,9 @@
         DEFAULT_CLIPVISION: DEFAULT_CLIPVISION,
         DEFAULT_IP_WEIGHT: DEFAULT_IP_WEIGHT,
         DEFAULT_SPRITE_W: DEFAULT_SPRITE_W,
-        DEFAULT_SPRITE_H: DEFAULT_SPRITE_H
+        DEFAULT_SPRITE_H: DEFAULT_SPRITE_H,
+        MAX_VIDEO_FRAMES: MAX_VIDEO_FRAMES
     };
 
-    console.log('[ComfyUI] Client ready (Pony + style-preserving IP-Adapter + LTX)');
+    console.log('[ComfyUI] Client ready (Pony + IP-Adapter + baseline video)');
 })();
