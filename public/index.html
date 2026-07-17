@@ -13,15 +13,459 @@
 </head>
 <body>
 
-<!-- Content loaded from previous version; scripts updated for ComfyUI -->
-<script>
-// Redirect notice if this truncated build is served — full body is restored below
-</script>
+<div class="app-container">
 
-<div class="app-container" id="appRoot">
-  <!-- The full HTML body is large; we keep scripts at bottom. -->
-  <p style="padding:2rem;color:#ccc">Loading… If this stays, hard-refresh after pull.</p>
+    <header class="app-header">
+        <div class="brand">
+            <img src="assets/Angelsword-Logo-white_25pct.webp" alt="Angel's Sword Studios" class="brand-logo">
+            <div>
+                <div class="brand-name">AS Adventurer Creator</div>
+                <div class="brand-tagline">Design · Generate · Prepare · Export</div>
+            </div>
+        </div>
+        <nav class="pipeline-steps" id="pipelineSteps">
+            <span class="step active" data-tab="tab-sprite-prep"><span class="step-badge">①</span> Sprite Prep</span>
+            <span class="step-arrow">→</span>
+            <span class="step" data-tab="tab-video-gen"><span class="step-badge">②</span> Generate Video</span>
+            <span class="step-arrow">→</span>
+            <span class="step" data-tab="tab-video-prep"><span class="step-badge">③</span> Video Prep</span>
+            <span class="step-arrow">→</span>
+            <span class="step" data-tab="tab-exporter"><span class="step-badge">④</span> Export</span>
+        </nav>
+    </header>
+
+    <nav class="tab-bar" id="tabBar">
+        <button class="tab-btn active" data-tab="tab-sprite-prep" title="Create or prepare a sprite image with chroma key background"><span class="tab-icon">🎨</span><span class="tab-label">Sprite Prep</span></button>
+        <button class="tab-btn" data-tab="tab-video-gen" title="Generate animated videos from your sprite using AI"><span class="tab-icon">🎬</span><span class="tab-label">Generate Video</span></button>
+        <button class="tab-btn" data-tab="tab-video-prep" title="Build loops, concatenate videos, and add crossfades"><span class="tab-icon">🔄</span><span class="tab-label">Video Prep</span></button>
+        <button class="tab-btn" data-tab="tab-exporter" title="Export as transparent WebM or GIF with chroma key removal"><span class="tab-icon">📦</span><span class="tab-label">Model Exporter</span></button>
+        <button class="tab-btn" data-tab="tab-settings" title="API keys, SuperGrok OAuth, server settings, and about"><span class="tab-icon">⚙️</span><span class="tab-label">Settings</span></button>
+    </nav>
+
+    <div class="tab-content" id="tabContent">
+
+        <!-- TAB 1: SPRITE PREP -->
+        <div class="tab-panel active" id="tab-sprite-prep">
+            <div class="mode-selector" id="spritePrepMode">
+                <button class="mode-btn active" data-mode="manual" title="Upload your own sprite image">📁 Manual Upload</button>
+                <button class="mode-btn" data-mode="generate" title="Generate a sprite using AI (OpenAI, Grok, or ComfyUI)">✨ AI Generate</button>
+            </div>
+
+            <div id="spriteManualMode">
+                <div class="main-layout">
+                    <div>
+                        <section class="stage" id="spManualStage1">
+                            <div class="stage-header"><span class="stage-number">1</span><span class="stage-title">Upload Sprite</span></div>
+                            <div class="glass-panel">
+                                <div class="form-row"><label for="spCharName">Character Name</label><input type="text" id="spCharName" placeholder="e.g. Mirrime, Nix, Aniela..." title="Your character's name"></div>
+                                <div class="upload-zone" id="spUploadZone" title="Drop a PNG here or click to browse">
+                                    <div class="upload-icon">🖼️</div>
+                                    <div class="upload-text">Drop sprite PNG here or click to browse</div>
+                                    <div class="upload-hint">Any resolution — will be placed on 1280×720 canvas</div>
+                                    <input type="file" id="spFileInput" accept="image/png,image/jpeg,image/webp">
+                                </div>
+                            </div>
+                        </section>
+                        <section class="stage disabled" id="spManualStage2">
+                            <div class="stage-header"><span class="stage-number">2</span><span class="stage-title">Key Color & Position</span></div>
+                            <div class="glass-panel">
+                                <div class="form-row">
+                                    <label>Key Color <span class="text-dim">(background color for chroma key)</span></label>
+                                    <div class="color-swatches" id="spColorSwatches">
+                                        <div class="color-swatch selected" data-color="#00FF00" style="background:#00FF00" title="Green"><span class="swatch-badge">Green</span></div>
+                                        <div class="color-swatch" data-color="#FF00FF" style="background:#FF00FF" title="Magenta"><span class="swatch-badge">Magenta</span></div>
+                                        <div class="color-swatch" data-color="#0000FF" style="background:#0000FF" title="Blue"><span class="swatch-badge">Blue</span></div>
+                                        <div class="color-swatch" data-color="#FFFF00" style="background:#FFFF00" title="Yellow"><span class="swatch-badge">Yellow</span></div>
+                                        <div class="color-swatch" data-color="#00FFFF" style="background:#00FFFF" title="Cyan"><span class="swatch-badge">Cyan</span></div>
+                                    </div>
+                                </div>
+                                <div class="form-row"><label for="spOffset">Vertical Offset</label><div class="range-row"><input type="range" id="spOffset" min="-500" max="500" value="0"><span class="range-value" id="spOffsetVal">0px</span></div></div>
+                                <div class="form-row"><label for="spZoom">Zoom</label><div class="range-row"><input type="range" id="spZoom" min="10" max="300" value="100"><span class="range-value" id="spZoomVal">100%</span></div></div>
+                            </div>
+                        </section>
+                        <section class="stage disabled" id="spManualStage3">
+                            <div class="stage-header"><span class="stage-number">3</span><span class="stage-title">Export & Handoff</span></div>
+                            <div class="btn-group">
+                                <button class="btn btn-secondary" id="spDownloadBtn">💾 Download PNG</button>
+                                <button class="btn-handoff" id="spHandoffBtn">Send to Generate Video →</button>
+                            </div>
+                        </section>
+                    </div>
+                    <div>
+                        <div class="glass-panel">
+                            <div class="panel-title"><span class="title-icon">👁️</span> Preview</div>
+                            <div class="canvas-container" id="spCanvasContainer"><canvas id="spCanvas" width="1280" height="720"></canvas></div>
+                            <div class="text-mono text-dim mt-1" style="font-size:0.7rem">1280 × 720</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="spriteGenerateMode" class="hidden">
+                <div class="main-layout">
+                    <div>
+                        <div class="glass-panel">
+                            <div class="panel-title"><span class="title-icon">✨</span> Character Details</div>
+                            <div class="form-row"><label for="sgCharName">Character Name <span class="text-gold">*</span></label><input type="text" id="sgCharName" placeholder="e.g. Mirrime the Mage"></div>
+                            <div class="form-row"><label for="sgCharDesc">Character Description</label><textarea id="sgCharDesc" rows="3" placeholder="Blue hair, red cape, golden feather cap, adventurer outfit..."></textarea></div>
+                            <div class="form-row"><label for="sgCharAction">Character Action <span class="text-dim">(optional)</span></label><input type="text" id="sgCharAction" placeholder="e.g. waving hello, casting a spell"></div>
+                            <div class="form-row">
+                                <label>Race Mode</label>
+                                <div class="mode-selector" id="sgRaceMode">
+                                    <button class="mode-btn active" data-mode="normal">👤 Normal</button>
+                                    <button class="mode-btn" data-mode="kanolith">🐾 Kanolith</button>
+                                    <button class="mode-btn" data-mode="zoalith">🐲 Zoalith</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="glass-panel">
+                            <div class="panel-title"><span class="title-icon">🖼️</span> References <span class="text-dim" style="font-weight:400;font-family:var(--font-body);text-transform:none;letter-spacing:0">(optional)</span></div>
+                            <div class="two-col">
+                                <div class="form-row">
+                                    <label>Character Reference</label>
+                                    <div class="upload-zone" id="sgCharRefZone" style="padding:1rem">
+                                        <div class="upload-icon" style="font-size:1.5rem">👤</div>
+                                        <div class="upload-text" style="font-size:0.75rem">Character Reference</div>
+                                        <input type="file" id="sgCharRefInput" accept="image/*">
+                                    </div>
+                                    <div id="sgCharRefPreview" class="hidden mt-1"></div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Art Style Reference</label>
+                                    <div class="upload-zone" id="sgStyleRefZone" style="padding:1rem">
+                                        <div class="upload-icon" style="font-size:1.5rem">🎨</div>
+                                        <div class="upload-text" style="font-size:0.75rem">Style Reference</div>
+                                        <input type="file" id="sgStyleRefInput" accept="image/*">
+                                    </div>
+                                    <div id="sgStyleRefPreview" class="hidden mt-1"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="glass-panel">
+                            <div class="panel-title"><span class="title-icon">🎯</span> Generation Settings</div>
+
+                            <div class="form-row">
+                                <label>AI Provider</label>
+                                <div class="mode-selector" id="sgProvider">
+                                    <button class="mode-btn active" data-provider="openai" title="Use OpenAI GPT Image 2">🤖 OpenAI</button>
+                                    <button class="mode-btn" data-provider="grok" title="Use Grok Imagine (SuperGrok OAuth)">✨ Grok</button>
+                                    <button class="mode-btn" data-provider="comfyui" title="Use local ComfyUI (Animagine XL 4.0)">🖥️ ComfyUI</button>
+                                </div>
+                                <div class="text-dim mt-1" style="font-size:0.7rem">ComfyUI runs fully local. Configure URL + checkpoint in Settings.</div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>Key Color</label>
+                                <div class="color-swatches" id="sgColorSwatches">
+                                    <div class="color-swatch selected" data-color="#00FF00" style="background:#00FF00" title="Green"><span class="swatch-badge">Green</span></div>
+                                    <div class="color-swatch" data-color="#FF00FF" style="background:#FF00FF" title="Magenta"><span class="swatch-badge">Magenta</span></div>
+                                    <div class="color-swatch" data-color="#0000FF" style="background:#0000FF" title="Blue"><span class="swatch-badge">Blue</span></div>
+                                    <div class="color-swatch" data-color="#FFFF00" style="background:#FFFF00" title="Yellow"><span class="swatch-badge">Yellow</span></div>
+                                    <div class="color-swatch" data-color="#00FFFF" style="background:#00FFFF" title="Cyan"><span class="swatch-badge">Cyan</span></div>
+                                </div>
+                                <button class="btn btn-sm btn-secondary mt-1" id="sgAdvancedKeyBtn" style="font-size:0.7rem">🔬 Advanced Key Color</button>
+                            </div>
+
+                            <div id="advKeyModal" class="modal-overlay hidden">
+                                <div class="modal-panel glass-panel" style="max-width:800px;width:95%">
+                                    <div class="panel-title"><span class="title-icon">🔬</span> Advanced Key Color Analysis<button class="btn btn-sm btn-danger" id="advKeyClose" style="float:right;margin-top:-4px">✕</button></div>
+                                    <p class="text-dim" style="font-size:0.8rem;margin:0.5rem 0">Draw a rectangle around the <strong>character only</strong>, then click <strong>Analyze</strong>.</p>
+                                    <div id="advKeyCanvasWrap" style="position:relative;display:inline-block;max-width:100%;cursor:crosshair;border:1px solid rgba(219,184,88,0.3);border-radius:6px;overflow:hidden">
+                                        <canvas id="advKeyCanvas" width="760" height="500"></canvas>
+                                        <div id="advKeySelection" style="position:absolute;border:2px dashed #dbb858;background:rgba(219,184,88,0.1);display:none;pointer-events:none"></div>
+                                    </div>
+                                    <div class="btn-group mt-1">
+                                        <button class="btn btn-secondary" id="advKeyClearBtn">🗑️ Clear Selection</button>
+                                        <button class="btn btn-primary" id="advKeyAnalyzeBtn" disabled>🔍 Analyze Selection</button>
+                                    </div>
+                                    <div id="advKeyResults" class="mt-1 hidden">
+                                        <div class="panel-title" style="font-size:0.85rem"><span class="title-icon">📊</span> Results — Best Key Color</div>
+                                        <div id="advKeyResultsList"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label>Simultaneous Generations</label>
+                                <div class="gen-count" id="sgGenCount">
+                                    <button class="gen-count-btn active" data-count="1">1</button>
+                                    <button class="gen-count-btn" data-count="2">2</button>
+                                    <button class="gen-count-btn" data-count="3">3</button>
+                                    <button class="gen-count-btn" data-count="4">4</button>
+                                </div>
+                            </div>
+
+                            <button class="btn-handoff mt-2" id="sgGenerateBtn">✨ Generate Sprite</button>
+                            <div class="progress-container" id="sgProgress">
+                                <div class="progress-bar"><div class="fill" id="sgProgressFill"></div></div>
+                                <div class="progress-text"><span id="sgProgressText">Generating...</span><button class="btn btn-sm btn-danger" id="sgCancelBtn">Cancel</button></div>
+                            </div>
+                            <div id="sgStatus"></div>
+                        </div>
+
+                        <div id="sgResultsSection" class="hidden">
+                            <div class="glass-panel">
+                                <div class="panel-title"><span class="title-icon">🖼️</span> Results</div>
+                                <div class="results-grid" id="sgResultsGrid"></div>
+                                <div class="mt-2 btn-group">
+                                    <button class="btn btn-secondary" id="sgToManualBtn">🎨 Send to Manual Upload</button>
+                                    <button class="btn-handoff" id="sgHandoffBtn">Send to Generate Video →</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="glass-panel">
+                            <div class="panel-title"><span class="title-icon">👁️</span> Preview</div>
+                            <div class="canvas-container" id="sgCanvasContainer"><canvas id="sgCanvas" width="1280" height="720"></canvas></div>
+                            <div class="text-mono text-dim mt-1" style="font-size:0.7rem">1280 × 720 · OpenAI / Grok / ComfyUI</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: GENERATE VIDEO (partial — continued in part 2 if needed) -->
+        <div class="tab-panel" id="tab-video-gen">
+            <div class="info-banner"><span class="banner-icon">💡</span><span>Skip this step if you want to use your own video generator. Upload your video directly in Video Prep instead.</span></div>
+            <div class="main-layout">
+                <div>
+                    <div class="glass-panel">
+                        <div class="panel-title"><span class="title-icon">🖼️</span> Reference Image</div>
+                        <div class="panel-subtitle">Use the sprite from Step 1, or upload your own reference image(s).</div>
+                        <div id="vgRefImagePreview" class="canvas-container mb-2 hidden"><img id="vgRefImage" style="width:100%;display:block"></div>
+                        <div class="upload-zone" id="vgUploadZone" title="Upload reference image(s)">
+                            <div class="upload-icon">🖼️</div>
+                            <div class="upload-text">Drop reference image(s) or click to browse</div>
+                            <div class="upload-hint">PNG, JPG — up to 3 images for Reference Mode</div>
+                            <input type="file" id="vgFileInput" accept="image/*" multiple>
+                        </div>
+                        <div id="vgRefFromSprite" class="hidden mt-1"><div class="status-msg info"><span>📌</span> Using sprite from Sprite Prep</div></div>
+                    </div>
+
+                    <div class="glass-panel">
+                        <div class="panel-title"><span class="title-icon">🎬</span> Video Generation</div>
+
+                        <div class="form-row">
+                            <label>AI Provider</label>
+                            <div class="mode-selector" id="vgProvider">
+                                <button class="mode-btn active" data-provider="gemini" title="Use Google Gemini Omni Flash">🎬 Gemini</button>
+                                <button class="mode-btn" data-provider="grok" title="Use Grok Imagine (SuperGrok OAuth)">✨ Grok</button>
+                                <button class="mode-btn" data-provider="comfyui" title="Use local ComfyUI (AnimateDiff SDXL)">🖥️ ComfyUI</button>
+                            </div>
+                            <div class="text-dim mt-1" style="font-size:0.7rem">ComfyUI runs fully local. Configure in Settings.</div>
+                        </div>
+
+                        <div class="mode-selector" id="vgModeSelector">
+                            <button class="mode-btn active" data-mode="reference">🖼️ Reference Mode</button>
+                            <button class="mode-btn" data-mode="keyframe">🔑 Keyframe Mode</button>
+                        </div>
+
+                        <div id="vgReferenceMode">
+                            <div class="form-row">
+                                <label for="vgPrompt">Animation Prompt</label>
+                                <textarea id="vgPrompt" rows="6">Locked-off Position Static Camera. Perfect Seamless Loop. 2d Anime Sakuga Game Animation Style. (Character description), (Animation Type) Subtle Movements.
+
+[Constraints]: Do NOT Camera Zoom, Absolute static camera. Zero Camera movement, no panning, no drifting, and no zooming. The camera is perfectly stationary; only the character moves. The character herself doesnt move either on the Y axis. Maintain the same character position.</textarea>
+                            </div>
+                        </div>
+
+                        <div id="vgKeyframeMode" class="hidden">
+                            <div class="two-col">
+                                <div class="form-row">
+                                    <label>Start Frame</label>
+                                    <div class="upload-zone" id="vgStartFrameZone" style="padding:1rem">
+                                        <div class="upload-icon" style="font-size:1.5rem" id="vgStartFrameIcon">🏁</div>
+                                        <div class="upload-text" style="font-size:0.75rem" id="vgStartFrameText">Start Frame</div>
+                                        <input type="file" id="vgStartFrameInput" accept="image/*">
+                                        <img id="vgStartFramePreview" class="hidden" style="max-width:100%;max-height:180px;border-radius:var(--radius);border:1px solid var(--border);margin-top:0.5rem">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label>End Frame</label>
+                                    <div class="upload-zone" id="vgEndFrameZone" style="padding:1rem">
+                                        <div class="upload-icon" style="font-size:1.5rem" id="vgEndFrameIcon">🎯</div>
+                                        <div class="upload-text" style="font-size:0.75rem" id="vgEndFrameText">End Frame</div>
+                                        <input type="file" id="vgEndFrameInput" accept="image/*">
+                                        <img id="vgEndFramePreview" class="hidden" style="max-width:100%;max-height:180px;border-radius:var(--radius);border:1px solid var(--border);margin-top:0.5rem">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-row mt-1">
+                                <label for="vgKeyframePrompt">Animation Prompt</label>
+                                <textarea id="vgKeyframePrompt" rows="6">Locked-off Position Static Camera. Perfect Seamless Loop. 2d Anime Sakuga Game Animation Style. (Character description), (Animation Type) Subtle Movements.
+
+[Constraints]: Do NOT Camera Zoom, Absolute static camera. Zero Camera movement, no panning, no drifting, and no zooming. The camera is perfectly stationary; only the character moves. The character herself doesnt move either on the Y axis. Maintain the same character position.</textarea>
+                            </div>
+                        </div>
+
+                        <hr class="gold-divider">
+
+                        <div class="config-grid">
+                            <div class="form-row"><label for="vgDuration">Video Length</label><div class="range-row"><input type="range" id="vgDuration" min="3" max="10" value="5"><span class="range-value" id="vgDurationVal">5s</span></div></div>
+                            <div class="form-row">
+                                <label>Simultaneous Generations</label>
+                                <div class="gen-count" id="vgGenCount">
+                                    <button class="gen-count-btn active" data-count="1">1</button>
+                                    <button class="gen-count-btn" data-count="2">2</button>
+                                    <button class="gen-count-btn" data-count="3">3</button>
+                                    <button class="gen-count-btn" data-count="4">4</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button class="btn-handoff mt-2" id="vgGenerateBtn">🎬 Generate Video</button>
+                        <div class="progress-container" id="vgProgress">
+                            <div class="progress-bar"><div class="fill" id="vgProgressFill"></div></div>
+                            <div class="progress-text"><span id="vgProgressText">Generating video...</span><button class="btn btn-sm btn-danger" id="vgCancelBtn">Cancel</button></div>
+                        </div>
+                        <div id="vgStatus"></div>
+                    </div>
+
+                    <div id="vgResultsSection" class="hidden">
+                        <div class="glass-panel">
+                            <div class="panel-title"><span class="title-icon">🎞️</span> Generated Videos</div>
+                            <div class="results-grid" id="vgResultsGrid"></div>
+                            <div class="mt-2"><button class="btn-handoff" id="vgHandoffBtn">Add to Video Preparation →</button></div>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <div class="glass-panel">
+                        <div class="panel-title"><span class="title-icon">ℹ️</span> About Video Generation</div>
+                        <div class="panel-subtitle">Use <strong>Gemini</strong>, <strong>Grok Imagine</strong>, or local <strong>ComfyUI</strong> to generate short animated videos from your sprite.</div>
+                        <div class="settings-info"><span class="info-icon">🔑</span> Configure providers in the <strong>Settings</strong> tab.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3-4 loaded by existing modules; minimal shells if missing -->
+        <div class="tab-panel" id="tab-video-prep">
+            <div class="main-layout"><div><section class="stage" id="vpStage1"><div class="stage-header"><span class="stage-number">1</span><span class="stage-title">Load Video</span></div><div class="glass-panel"><div class="upload-zone" id="vpUploadZone"><div class="upload-icon">🎬</div><div class="upload-text">Drop video file here or click to browse</div><div class="upload-hint">MP4, WebM, MOV</div><input type="file" id="vpFileInput" accept="video/mp4,video/webm,video/quicktime,.mov"></div><div id="vpFromVideoGen" class="hidden mt-1"><div class="status-msg info"><span>📌</span> Video loaded from Generate Video</div></div></div></section><section class="stage disabled" id="vpStage2"><div class="stage-header"><span class="stage-number">2</span><span class="stage-title">Loop Builder</span></div><div class="glass-panel"><div class="canvas-container" id="vpCanvasContainer"><canvas id="vpCanvas"></canvas></div><div class="scrubber-container mt-1"><div class="scrubber-controls"><button class="btn btn-sm btn-icon" id="vpPrevFrame">⏮</button><button class="btn btn-sm btn-icon" id="vpPlayBtn">▶️</button><button class="btn btn-sm btn-icon" id="vpNextFrame">⏭</button></div><input type="range" id="vpScrubber" min="0" max="100" value="0"><span class="scrubber-info" id="vpFrameInfo">0 / 0</span></div><div class="onion-skin-row mt-1"><label class="toggle-switch"><input type="checkbox" id="vpOnionSkin"><span class="slider"></span></label><label for="vpOnionSkin" style="margin-bottom:0">Onion Skin (Frame 0 overlay)</label></div><div class="flex items-center justify-between mt-2"><div class="btn-group"><button class="btn btn-sm btn-secondary" id="vpSetLoopBtn">📍 Set Loop Point</button><button class="btn btn-sm btn-secondary" id="vpClearLoopBtn">✖ Clear</button><button class="btn btn-sm btn-accent" id="vpPreviewLoopBtn">▶ Preview Loop</button></div><span class="text-mono text-muted" id="vpLoopInfo" style="font-size:0.75rem"></span></div></div></section><section class="stage disabled" id="vpStage3"><div class="stage-header"><span class="stage-number">3</span><span class="stage-title">Output Mode</span></div><div class="glass-panel"><div class="form-row"><label>Loop Mode</label><div class="seg-toggle" id="vpLoopMode"><button class="seg-btn active" data-mode="none">No Loop</button><button class="seg-btn" data-mode="pingpong">Ping-Pong</button><button class="seg-btn" data-mode="reverse">Reverse</button></div></div><hr class="gold-divider"><div class="form-row"><label>Video Concatenation</label><div id="vpConcatSection"><button class="btn btn-sm btn-secondary" id="vpAddVideoBtn">➕ Add 2nd Video</button><input type="file" id="vpConcatFileInput" accept="video/mp4,video/webm,video/quicktime,.mov" class="hidden"></div><div id="vpConcatInfo" class="hidden mt-1"><div class="status-msg info"><span>🔗</span> <span id="vpConcatText">2nd video loaded</span><button class="btn btn-sm btn-danger" id="vpRemoveConcat" style="margin-left:auto">✖</button></div><div class="crossfade-controls mt-1"><label class="toggle-switch"><input type="checkbox" id="vpCrossfade"><span class="slider"></span></label><label for="vpCrossfade" style="margin-bottom:0;flex:1">Crossfade</label><div class="range-row" style="flex:2"><input type="range" id="vpCrossfadeDuration" min="100" max="1000" value="300" step="50"><span class="range-value" id="vpCrossfadeDurationVal">300ms</span></div></div></div></div><button class="btn-handoff mt-2" id="vpHandoffBtn">Send to Model Exporter →</button></div></section></div><div><div class="glass-panel"><div class="panel-title"><span class="title-icon">📊</span> Video Info</div><div id="vpVideoInfo" class="text-muted" style="font-size:0.8rem"><div>No video loaded</div></div></div></div></div>
+        </div>
+
+        <div class="tab-panel" id="tab-exporter">
+            <div class="export-mode-toggle" id="exportModeToggle">
+                <button class="export-mode-btn active" data-mode="adventurer">⚔️ Adventurer</button>
+                <button class="export-mode-btn" data-mode="normal">🟢 F. Normal</button>
+                <button class="export-mode-btn" data-mode="premium">💎 F. Premium</button>
+            </div>
+            <div class="main-layout"><div><section class="stage" id="exStage1"><div class="stage-header"><span class="stage-number">1</span><span class="stage-title">Source Video</span></div><div class="glass-panel"><div class="upload-zone" id="exUploadZone"><div class="upload-icon">🎬</div><div class="upload-text">Drop video here or click to browse</div><div class="upload-hint">MP4, WebM, MOV — or received from Video Prep</div><input type="file" id="exFileInput" accept="video/mp4,video/webm,video/quicktime,.mov"></div><div id="exFromVideoPrep" class="hidden mt-1"><div class="status-msg info"><span>📌</span> Video received from Video Preparation</div></div></div></section><section class="stage disabled" id="exStage2"><div class="stage-header"><span class="stage-number">2</span><span class="stage-title">Chroma Key</span></div><div class="glass-panel"><div class="canvas-container" id="exCanvasContainer"><canvas id="exCanvas"></canvas><div id="exCropOverlay" class="crop-overlay hidden"><div class="crop-region" id="exCropRegion"></div></div></div><div class="scrubber-container mt-1"><div class="scrubber-controls"><button class="btn btn-sm btn-icon" id="exPrevFrame">⏮</button><button class="btn btn-sm btn-icon" id="exPlayBtn">▶️</button><button class="btn btn-sm btn-icon" id="exNextFrame">⏭</button></div><input type="range" id="exScrubber" min="0" max="100" value="0"><span class="scrubber-info" id="exFrameInfo">0 / 0</span></div><div class="flex items-center justify-between mt-1"><div class="preview-modes" id="exPreviewModes"><button class="preview-mode-btn active" data-mode="checker">Checker</button><button class="preview-mode-btn" data-mode="black">Black</button><button class="preview-mode-btn" data-mode="white">White</button><button class="preview-mode-btn" data-mode="original">Original</button></div></div><hr class="gold-divider"><div class="form-row"><label>Key Color</label><div class="flex items-center gap-sm"><div class="color-swatches" id="exColorSwatches"><div class="color-swatch selected" data-color="#00FF00" style="background:#00FF00"><span class="swatch-badge">Green</span></div><div class="color-swatch" data-color="#FF00FF" style="background:#FF00FF"><span class="swatch-badge">Magenta</span></div><div class="color-swatch" data-color="#0000FF" style="background:#0000FF"><span class="swatch-badge">Blue</span></div><div class="color-swatch" data-color="#FFFF00" style="background:#FFFF00"><span class="swatch-badge">Yellow</span></div><div class="color-swatch" data-color="#00FFFF" style="background:#00FFFF"><span class="swatch-badge">Cyan</span></div></div><button class="eyedropper-btn" id="exEyedropper">💧</button><button class="btn btn-sm btn-secondary" id="exAutoDetect">Auto</button></div></div><div class="form-row"><label for="exSimilarity">Similarity</label><div class="range-row"><input type="range" id="exSimilarity" min="0" max="100" value="40"><span class="range-value" id="exSimilarityVal">40%</span></div></div><div class="form-row"><label for="exSmoothness">Smoothness</label><div class="range-row"><input type="range" id="exSmoothness" min="0" max="100" value="8"><span class="range-value" id="exSmoothnessVal">8%</span></div></div><div class="form-row"><label for="exSpillSuppress">Spill Suppression</label><div class="range-row"><input type="range" id="exSpillSuppress" min="0" max="100" value="10"><span class="range-value" id="exSpillSuppressVal">10%</span></div></div><div class="form-row"><label for="exSmokeCleanup">Smoke Cleanup</label><div class="range-row" style="justify-content:flex-start;gap:0.5rem;"><input type="checkbox" id="exSmokeCleanup"><span class="range-value">Neutralize key-colored VFX</span></div></div><hr class="gold-divider"><div class="config-grid"><div class="form-row"><label for="exScale">Scale</label><div class="range-row"><input type="range" id="exScale" min="10" max="300" value="100"><span class="range-value" id="exScaleVal">100%</span></div></div><div class="form-row"><label for="exVOffset">Vertical Offset</label><div class="range-row"><input type="range" id="exVOffset" min="-500" max="500" value="0"><span class="range-value" id="exVOffsetVal">0px</span></div></div><div class="form-row"><label for="exSaturation">Saturation</label><div class="range-row"><input type="range" id="exSaturation" min="0" max="200" value="100"><span class="range-value" id="exSaturationVal">100%</span></div></div><div class="form-row"><label for="exBrightness">Brightness</label><div class="range-row"><input type="range" id="exBrightness" min="50" max="150" value="100"><span class="range-value" id="exBrightnessVal">100%</span></div></div><div class="form-row"><label for="exEdgeFade">Edge Fade</label><div class="range-row"><input type="range" id="exEdgeFade" min="0" max="200" value="0"><span class="range-value" id="exEdgeFadeVal">0px</span></div></div><div class="form-row"><label for="exAntiAlias">Anti-Aliasing</label><label class="toggle-switch"><input type="checkbox" id="exAntiAlias"><span class="slider"></span></label></div></div><div class="form-row mt-1"><label>Crop Ratio</label><div class="seg-toggle" id="exCropRatio"><button class="seg-btn active" data-ratio="off">Off</button><button class="seg-btn" data-ratio="1:1">1:1</button><button class="seg-btn" data-ratio="4:3">4:3</button></div></div></div></section><section class="stage disabled" id="exStage3"><div class="stage-header"><span class="stage-number">3</span><span class="stage-title">Export</span></div><div class="glass-panel"><div class="config-grid"><div class="form-row"><label for="exStartFrame">Start Frame</label><input type="number" id="exStartFrame" value="0" min="0"></div><div class="form-row"><label for="exEndFrame">End Frame</label><input type="number" id="exEndFrame" value="0" min="0"></div><div class="form-row"><label for="exFrameSkip">Frame Skip</label><input type="number" id="exFrameSkip" value="0" min="0" max="10"></div><div class="form-row"><label for="exFPS">FPS Override</label><input type="number" id="exFPS" value="0" min="0" max="60"></div></div><div class="config-grid mt-1"><div class="form-row"><label for="exWidth">Output Width</label><input type="number" id="exWidth" value="0" min="0"></div><div class="form-row"><label for="exHeight">Output Height</label><div class="flex items-center gap-sm"><input type="number" id="exHeight" value="0" min="0" style="flex:1"><label class="toggle-switch"><input type="checkbox" id="exAspectLock" checked><span class="slider"></span></label><span class="text-dim" style="font-size:0.7rem">🔒</span></div></div></div><hr class="gold-divider"><div class="form-row"><label>Quick Filename</label><div class="filename-presets" id="exFilenamePresets"><button class="filename-preset-btn" data-preset="Neutral_Idle">Neutral Idle</button><button class="filename-preset-btn" data-preset="Intro">Intro</button><button class="filename-preset-btn" data-preset="Outro">Outro</button><button class="filename-preset-btn" data-preset="Neutral_Speaking">Neutral Speaking</button><button class="filename-preset-btn" data-preset="Animation">Animation</button><button class="filename-preset-btn" data-preset="custom">Custom</button></div><input type="text" id="exFilename" placeholder="output" class="mt-1"></div><div class="export-estimate" id="exEstimate"><span id="exEstFrames">Frames: --</span><span id="exEstSize">Est. Size: --</span><span id="exEstFormat">Format: WebM</span></div><button class="btn-handoff" id="exExportBtn">📦 Export Transparent Motion</button><div class="progress-container" id="exProgress"><div class="progress-bar"><div class="fill" id="exProgressFill"></div></div><div class="progress-text"><span id="exProgressText">Exporting...</span><button class="btn btn-sm btn-danger" id="exCancelBtn">Cancel</button></div></div><div id="exStatus"></div></div></section></div><div><div class="glass-panel"><div class="panel-title"><span class="title-icon">📊</span> Export Info</div><div id="exInfo" class="text-muted" style="font-size:0.8rem"><div>No video loaded</div></div></div><div class="glass-panel"><div class="panel-title"><span class="title-icon">📋</span> Mode Limits</div><div id="exModeLimits" class="text-muted" style="font-size:0.8rem"><div><strong class="text-gold">Adventurer</strong></div><div>Format: WebM</div><div>Max Frames: Unlimited</div><div>Max Resolution: Unlimited</div></div></div></div></div>
+        </div>
+
+        <!-- TAB 5: SETTINGS -->
+        <div class="tab-panel" id="tab-settings">
+            <div class="settings-section">
+                <div class="glass-panel">
+                    <div class="panel-title"><span class="title-icon">🤖</span> OpenAI API Key</div>
+                    <div class="panel-subtitle">Required for AI sprite generation (GPT Image 2). Stored locally only.</div>
+                    <div class="api-key-row">
+                        <div class="input-password"><input type="password" id="settingsOpenAIKey" placeholder="sk-..."><button class="toggle-vis" id="settingsOpenAIToggle">👁️</button></div>
+                        <button class="btn btn-sm btn-secondary" id="settingsOpenAISave">Save</button>
+                        <button class="btn btn-sm btn-accent" id="settingsOpenAITest">Test</button>
+                    </div>
+                    <div id="settingsOpenAIStatus"></div>
+                </div>
+
+                <div class="glass-panel">
+                    <div class="panel-title"><span class="title-icon">🎬</span> Google Gemini API Key</div>
+                    <div class="panel-subtitle">Required for AI video generation (Gemini Omni Flash). Stored locally only.</div>
+                    <div class="api-key-row">
+                        <div class="input-password"><input type="password" id="settingsGoogleKey" placeholder="AIza..."><button class="toggle-vis" id="settingsGoogleToggle">👁️</button></div>
+                        <button class="btn btn-sm btn-secondary" id="settingsGoogleSave">Save</button>
+                        <button class="btn btn-sm btn-accent" id="settingsGoogleTest">Test</button>
+                    </div>
+                    <div id="settingsGoogleStatus"></div>
+                </div>
+
+                <div class="glass-panel">
+                    <div class="panel-title"><span class="title-icon">✨</span> Grok (SuperGrok OAuth)</div>
+                    <div class="panel-subtitle">Log in with your SuperGrok or X Premium+ account to use <strong>Grok Imagine</strong>.</div>
+                    <div id="settingsGrokLoggedOut">
+                        <button class="btn-handoff" id="settingsGrokLogin">🔐 Login with SuperGrok</button>
+                    </div>
+                    <div id="settingsGrokLoggedIn" class="hidden">
+                        <div class="status-msg success" id="settingsGrokStatusMsg">✅ SuperGrok session active</div>
+                        <div class="flex items-center gap-sm mt-1" style="flex-wrap:wrap">
+                            <button class="btn btn-sm btn-accent" id="settingsGrokTest">Test Connection</button>
+                            <button class="btn btn-sm btn-secondary" id="settingsGrokRefresh">Refresh Token</button>
+                            <button class="btn btn-sm btn-danger" id="settingsGrokLogout">Logout</button>
+                        </div>
+                        <div class="text-mono text-dim mt-1" style="font-size:0.7rem" id="settingsGrokExpires"></div>
+                    </div>
+                    <div id="settingsGrokLoginProgress" class="hidden mt-1">
+                        <div class="status-msg info" id="settingsGrokProgressMsg"><span class="spinner"></span> Waiting for browser approval…</div>
+                        <div id="settingsGrokDeviceCode" class="hidden mt-1">
+                            <div class="glass-panel" style="padding:0.75rem;border:1px solid var(--accent-gold)">
+                                <div class="text-gold" style="font-weight:600;margin-bottom:0.25rem">Device Code</div>
+                                <div class="text-mono" style="font-size:1.25rem;letter-spacing:0.1em" id="settingsGrokUserCode">----</div>
+                                <div class="mt-1"><a id="settingsGrokVerifyLink" href="#" target="_blank" class="btn btn-sm btn-primary" style="text-decoration:none">Open Verification Page →</a></div>
+                            </div>
+                        </div>
+                        <button class="btn btn-sm btn-danger mt-1" id="settingsGrokCancelLogin">Cancel Login</button>
+                    </div>
+                    <div id="settingsGrokStatus"></div>
+                </div>
+
+                <!-- ComfyUI panel is also injected by comfyui-bridge.js if missing -->
+                <div class="glass-panel" id="settingsComfyPanel">
+                    <div class="panel-title"><span class="title-icon">🖥️</span> ComfyUI (Local)</div>
+                    <div class="panel-subtitle">Local generation with <strong>Animagine XL 4.0</strong> (sprites) and <strong>AnimateDiff SDXL</strong> (video). ComfyUI must be running.</div>
+                    <div class="form-row">
+                        <label for="settingsComfyUrl">ComfyUI URL</label>
+                        <input type="text" id="settingsComfyUrl" placeholder="http://127.0.0.1:8188" value="http://127.0.0.1:8188">
+                    </div>
+                    <div class="form-row">
+                        <label for="settingsComfyCkpt">Checkpoint filename</label>
+                        <input type="text" id="settingsComfyCkpt" placeholder="animagine-xl-4.0.safetensors" value="animagine-xl-4.0.safetensors">
+                        <div class="text-dim mt-1" style="font-size:0.7rem">Exact filename in ComfyUI/models/checkpoints/</div>
+                    </div>
+                    <div class="api-key-row" style="margin-top:0.5rem">
+                        <button class="btn btn-sm btn-secondary" id="settingsComfySave">Save</button>
+                        <button class="btn btn-sm btn-accent" id="settingsComfyTest">Test Connection</button>
+                    </div>
+                    <div id="settingsComfyStatus"></div>
+                </div>
+
+                <div class="glass-panel">
+                    <div class="panel-title"><span class="title-icon">🔊</span> Notifications</div>
+                    <div class="flex items-center gap-sm">
+                        <label class="toggle-switch"><input type="checkbox" id="settingsSoundEnabled" checked><span class="slider"></span></label>
+                        <label for="settingsSoundEnabled" style="margin-bottom:0">Play sound on generation complete</label>
+                        <button class="btn btn-sm btn-secondary" id="settingsSoundTest" style="margin-left:auto">🔊 Test</button>
+                    </div>
+                </div>
+
+                <div class="glass-panel">
+                    <div class="about-section">
+                        <div class="about-icon">⚔️</div>
+                        <div class="about-title">Angel's Sword Studios</div>
+                        <div class="about-tagline">AS Adventurer Creator — VTuber Creation Pipeline</div>
+                        <div class="about-tagline">Design → Generate → Prepare → Export</div>
+                        <hr class="gold-divider">
+                        <div class="about-motto">Crafted with ✦ for adventurers everywhere</div>
+                        <div class="product-links">
+                            <a href="https://www.angelssword.com" target="_blank">angelssword.com</a>
+                            <a href="https://rpg.angelssword.com" target="_blank">rpg.angelssword.com</a>
+                            <a href="https://clio.angelssword.com" target="_blank">clio.angelssword.com</a>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-info">
+                    <span class="info-icon">🔒</span>
+                    <strong>Privacy:</strong> API keys and tokens stay in localStorage. ComfyUI traffic stays on your machine via the local proxy.
+                </div>
+            </div>
+        </div>
+
+    </div>
 </div>
+
+<div class="toast-container" id="toastContainer"></div>
 
 <script src="xai-oauth.js"></script>
 <script src="comfyui-client.js"></script>
