@@ -1,11 +1,11 @@
 /**
  * AS Adventurer — ComfyUI Local Client
  *
- * Sprites  — Pony Diffusion V6 XL @ 1216×832 + optional IP-Adapter
- * Video    — baseline img2vid (low frame count / res for Arc 16GB)
+ * Sprites — Pony V6 XL @ 1216×832 + optional IP-Adapter
+ * Video  — sequential single-frame img2img (batch=1) then VHS combine
  *
- * Intel Arc (level_zero) OOMs if RepeatLatentBatch is large — keep frames
- * and spatial size small for the baseline video path.
+ * Intel Arc Level Zero OOMs on RepeatLatentBatch * SDXL even with 128GB RAM.
+ * Never sample more than 1 latent at a time on XPU.
  */
 
 (function () {
@@ -28,10 +28,10 @@
     const DEFAULT_SPRITE_W = 1216;
     const DEFAULT_SPRITE_H = 832;
 
-    // Arc A770-safe defaults: batch of SDXL latents is expensive
-    const MAX_VIDEO_FRAMES = 12;
-    const VIDEO_WIDTH = 768;
-    const VIDEO_HEIGHT = 512;
+    // Sequential frames (each sampled alone). 4 frames @ 8fps ≈ 0.5s loop
+    const VIDEO_FRAME_COUNT = 4;
+    const VIDEO_WIDTH = 640;
+    const VIDEO_HEIGHT = 448;
     const VIDEO_FPS = 8;
 
     function getBaseUrl() {
@@ -48,10 +48,7 @@
     }
     function getVideoModel() {
         var v = localStorage.getItem(STORAGE_VIDEO) || DEFAULT_VIDEO_MODEL;
-        if (/LTX-Video-ICLoRA/i.test(v)) {
-            console.warn('[ComfyUI] Video model was IC-LoRA; using sprite checkpoint instead');
-            return getCheckpoint();
-        }
+        if (/LTX-Video-ICLoRA/i.test(v)) return getCheckpoint();
         return v;
     }
     function setVideoModel(name) {
@@ -84,7 +81,7 @@
 
     async function comfyFetch(path, options) {
         options = options || {};
-        const resp = await fetch('/api/comfyui/proxy', {
+        return fetch('/api/comfyui/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -95,7 +92,6 @@
                 isBinary: !!options.isBinary
             })
         });
-        return resp;
     }
 
     async function testConnection() {
@@ -129,8 +125,7 @@
                 var canvas = document.createElement('canvas');
                 canvas.width = size;
                 canvas.height = size;
-                var ctx = canvas.getContext('2d');
-                ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+                canvas.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, size, size);
                 resolve(canvas.toDataURL('image/png'));
             };
             img.onerror = function () { reject(new Error('Failed to process character reference image')); };
@@ -168,10 +163,7 @@
             'detailed background, scenery'
         ];
         if (forIpAdapter) {
-            base.push(
-                'photorealistic, realistic, photo, 3d, cgi, western comic,',
-                'realistic skin texture, pores, freckles photo'
-            );
+            base.push('photorealistic, realistic, photo, 3d, cgi, western comic, realistic skin texture');
         } else {
             base.push('3d, realistic');
         }
@@ -185,30 +177,20 @@
             }
             return null;
         }
-
         return Object.entries(err.node_errors)
             .map(function (entry) {
                 var id = entry[0];
                 var e = entry[1];
                 var errors = e.errors || [];
                 var parts = errors.map(function (item) {
-                    var type = item.type || '';
                     var details = item.details || item.message || '';
-                    if (type === 'value_not_in_list' && /ckpt_name/i.test(details)) {
-                        return (
-                            'Checkpoint not found: ' + details +
-                            '. Settings → Video model must be an exact file from ComfyUI/models/checkpoints/ ' +
-                            '(not an IC-LoRA). Use your Pony .safetensors name.'
-                        );
+                    if (item.type === 'value_not_in_list' && /ckpt_name/i.test(details)) {
+                        return 'Checkpoint not found: ' + details +
+                            '. Use exact filename from ComfyUI/models/checkpoints/ (not IC-LoRA).';
                     }
-                    if (type === 'value_bigger_than_max') {
-                        return details + ' (reduce frames)';
-                    }
-                    return details || item.message || JSON.stringify(item);
+                    return details || JSON.stringify(item);
                 });
-                if (!parts.length) {
-                    parts.push(e.message || e.exception_message || JSON.stringify(e).slice(0, 200));
-                }
+                if (!parts.length) parts.push(e.message || JSON.stringify(e).slice(0, 200));
                 return 'node ' + id + ': ' + parts.join(' | ');
             })
             .join('; ')
@@ -220,9 +202,7 @@
         var w = opts.width || DEFAULT_SPRITE_W;
         var h = opts.height || DEFAULT_SPRITE_H;
         var s = opts.seed == null ? Math.floor(Math.random() * Math.pow(2, 32)) : opts.seed;
-
         console.log('[ComfyUI] T2I checkpoint:', ckpt, w + 'x' + h);
-
         return {
             '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
             '2': { class_type: 'CLIPTextEncode', inputs: { text: opts.prompt, clip: ['1', 1] } },
@@ -247,9 +227,7 @@
         var h = opts.height || DEFAULT_SPRITE_H;
         var s = opts.seed == null ? Math.floor(Math.random() * Math.pow(2, 32)) : opts.seed;
         var weight = opts.ipWeight == null ? getIpAdapterWeight() : opts.ipWeight;
-
         console.log('[ComfyUI] IP-Adapter checkpoint:', ckpt, '| weight:', weight);
-
         return {
             '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
             '2': { class_type: 'LoadImage', inputs: { image: opts.imageName } },
@@ -258,16 +236,9 @@
             '5': {
                 class_type: 'IPAdapterAdvanced',
                 inputs: {
-                    model: ['1', 0],
-                    ipadapter: ['3', 0],
-                    image: ['2', 0],
-                    clip_vision: ['4', 0],
-                    weight: weight,
-                    weight_type: 'ease out',
-                    combine_embeds: 'concat',
-                    start_at: 0.0,
-                    end_at: 0.65,
-                    embeds_scaling: 'V only'
+                    model: ['1', 0], ipadapter: ['3', 0], image: ['2', 0], clip_vision: ['4', 0],
+                    weight: weight, weight_type: 'ease out', combine_embeds: 'concat',
+                    start_at: 0.0, end_at: 0.65, embeds_scaling: 'V only'
                 }
             },
             '6': { class_type: 'CLIPTextEncode', inputs: { text: opts.prompt, clip: ['1', 1] } },
@@ -286,9 +257,94 @@
         };
     }
 
+    /** One frame only — never batch SDXL latents on Arc. */
+    function buildSingleFrameImg2Img(opts) {
+        var modelName = opts.modelName || getVideoModel();
+        var seed = opts.seed != null ? opts.seed : Math.floor(Math.random() * Math.pow(2, 32));
+        var pos = (opts.prompt || 'subtle idle breathing, locked camera') +
+            ', static camera, subtle motion, anime style';
+        var neg = 'camera move, zoom, pan, blur, morphing, low quality, watermark, photorealistic';
+
+        return {
+            '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: modelName } },
+            '2': { class_type: 'LoadImage', inputs: { image: opts.imageName } },
+            '3': {
+                class_type: 'ImageScale',
+                inputs: {
+                    image: ['2', 0],
+                    upscale_method: 'bilinear',
+                    width: VIDEO_WIDTH,
+                    height: VIDEO_HEIGHT,
+                    crop: 'center'
+                }
+            },
+            '4': { class_type: 'CLIPTextEncode', inputs: { text: pos, clip: ['1', 1] } },
+            '5': { class_type: 'CLIPTextEncode', inputs: { text: neg, clip: ['1', 1] } },
+            '6': { class_type: 'VAEEncode', inputs: { pixels: ['3', 0], vae: ['1', 2] } },
+            '7': {
+                class_type: 'KSampler',
+                inputs: {
+                    seed: seed,
+                    steps: 10,
+                    cfg: 2.5,
+                    sampler_name: 'euler',
+                    scheduler: 'normal',
+                    denoise: 0.28,
+                    model: ['1', 0],
+                    positive: ['4', 0],
+                    negative: ['5', 0],
+                    latent_image: ['6', 0]
+                }
+            },
+            '8': { class_type: 'VAEDecode', inputs: { samples: ['7', 0], vae: ['1', 2] } },
+            '9': {
+                class_type: 'SaveImage',
+                inputs: { filename_prefix: 'ASAdventurer_vframe', images: ['8', 0] }
+            }
+        };
+    }
+
+    /** Stitch already-generated frame files — no SDXL, low memory. */
+    function buildVhsCombineWorkflow(frameNames) {
+        var workflow = {};
+        var i;
+        for (i = 0; i < frameNames.length; i++) {
+            workflow[String(10 + i)] = {
+                class_type: 'LoadImage',
+                inputs: { image: frameNames[i] }
+            };
+        }
+        // Chain ImageBatch: (a,b)->ab, (ab,c)->abc, ...
+        var prevId = '10';
+        var nextNode = 50;
+        for (i = 1; i < frameNames.length; i++) {
+            var id = String(nextNode++);
+            workflow[id] = {
+                class_type: 'ImageBatch',
+                inputs: {
+                    image1: [prevId, 0],
+                    image2: [String(10 + i), 0]
+                }
+            };
+            prevId = id;
+        }
+        workflow['99'] = {
+            class_type: 'VHS_VideoCombine',
+            inputs: {
+                images: [prevId, 0],
+                frame_rate: VIDEO_FPS,
+                loop_count: 0,
+                filename_prefix: 'ASAdventurer_vid',
+                format: 'video/h264-mp4',
+                pingpong: false,
+                save_output: true
+            }
+        };
+        return workflow;
+    }
+
     async function queueAndWait(workflow, onProgress) {
         var clientId = 'as-adventurer-' + Math.random().toString(36).slice(2);
-
         var queueResp = await comfyFetch('/prompt', {
             method: 'POST',
             body: { prompt: workflow, client_id: clientId }
@@ -296,34 +352,30 @@
 
         if (!queueResp.ok) {
             var err = await queueResp.json().catch(function () { return {}; });
-            var msg = formatNodeErrors(err) || ('Queue failed (' + queueResp.status + ')');
-            throw new Error(msg);
+            throw new Error(formatNodeErrors(err) || ('Queue failed (' + queueResp.status + ')'));
         }
 
         var queueData = await queueResp.json();
         var promptId = queueData.prompt_id;
         if (!promptId) throw new Error('No prompt_id from ComfyUI');
-
         onProgress && onProgress({ stage: 'queued', promptId: promptId });
 
         for (var i = 0; i < 240; i++) {
-            await new Promise(function (r) { setTimeout(r, 5000); });
+            await new Promise(function (r) { setTimeout(r, 4000); });
             onProgress && onProgress({ stage: 'polling', attempt: i + 1, promptId: promptId });
 
             var histResp = await comfyFetch('/history/' + promptId);
             if (!histResp.ok) continue;
-
             var hist = await histResp.json();
             var entry = hist[promptId];
             if (!entry) continue;
 
             if (entry.status && entry.status.status_str === 'error') {
                 var st = JSON.stringify(entry.status);
-                if (/OUT_OF_HOST_MEMORY|out of memory|OOM/i.test(st)) {
+                if (/OUT_OF_HOST_MEMORY|out of memory|OOM|level_zero/i.test(st)) {
                     throw new Error(
-                        'ComfyUI ran out of memory (Arc/Level Zero). ' +
-                        'Video path uses fewer frames at 768×512 — pull latest client. ' +
-                        'Also try restarting ComfyUI to clear VRAM, close other GPU apps.'
+                        'Arc Level Zero OOM during sample. Restart the ComfyUI container, ensure shm_size is set, ' +
+                        'and use the latest client (sequential batch=1 video). Raw: ' + st.slice(0, 180)
                     );
                 }
                 throw new Error('ComfyUI workflow error: ' + st.slice(0, 300));
@@ -344,7 +396,6 @@
                 }
             }
         }
-
         throw new Error('ComfyUI generation timed out');
     }
 
@@ -354,10 +405,8 @@
             subfolder: fileInfo.subfolder || '',
             type: fileInfo.type || 'output'
         });
-
         var resp = await comfyFetch('/view?' + qs.toString(), { isBinary: true });
         if (!resp.ok) throw new Error('Failed to fetch ComfyUI output: ' + resp.status);
-
         var blob = await resp.blob();
         var dataUrl = await new Promise(function (resolve, reject) {
             var reader = new FileReader();
@@ -365,12 +414,8 @@
             reader.onerror = reject;
             reader.readAsDataURL(blob);
         });
-
-        var isVideo =
-            !!fileInfo.isVideo ||
-            /\.(mp4|webm|gif|mkv)$/i.test(fileInfo.filename || '');
-
-        return { blob: blob, dataUrl: dataUrl, isVideo: isVideo };
+        var isVideo = !!fileInfo.isVideo || /\.(mp4|webm|gif|mkv)$/i.test(fileInfo.filename || '');
+        return { blob: blob, dataUrl: dataUrl, isVideo: isVideo, fileInfo: fileInfo };
     }
 
     async function generateSprite(opts) {
@@ -384,24 +429,16 @@
             var imageName = await uploadImage(squared, 'as_char_ref_' + Date.now() + '.png');
             opts.onProgress && opts.onProgress({ stage: 'ipadapter', imageName: imageName, checkpoint: ckpt });
             workflow = buildSpriteWorkflowIPAdapter({
-                prompt: opts.prompt,
-                negative: opts.negative,
-                width: opts.width || DEFAULT_SPRITE_W,
-                height: opts.height || DEFAULT_SPRITE_H,
-                seed: opts.seed,
-                checkpoint: ckpt,
-                imageName: imageName,
-                ipWeight: opts.ipWeight
+                prompt: opts.prompt, negative: opts.negative,
+                width: opts.width || DEFAULT_SPRITE_W, height: opts.height || DEFAULT_SPRITE_H,
+                seed: opts.seed, checkpoint: ckpt, imageName: imageName, ipWeight: opts.ipWeight
             });
         } else {
             opts.onProgress && opts.onProgress({ stage: 't2i', checkpoint: ckpt });
             workflow = buildSpriteWorkflowT2I({
-                prompt: opts.prompt,
-                negative: opts.negative,
-                width: opts.width || DEFAULT_SPRITE_W,
-                height: opts.height || DEFAULT_SPRITE_H,
-                seed: opts.seed,
-                checkpoint: ckpt
+                prompt: opts.prompt, negative: opts.negative,
+                width: opts.width || DEFAULT_SPRITE_W, height: opts.height || DEFAULT_SPRITE_H,
+                seed: opts.seed, checkpoint: ckpt
             });
         }
 
@@ -412,118 +449,71 @@
     }
 
     /**
-     * Baseline image-to-video tuned for Intel Arc 16GB:
-     *   - downscale to 768×512 before VAE encode
-     *   - max 12 frames (~1.5s at 8fps) so batch latents fit
-     *   - fewer steps, modest denoise
+     * Arc-safe video:
+     *  1) Run N independent img2img passes (batch_size = 1 each)
+     *  2) Re-upload frames and VHS-combine (no SDXL in that step)
      */
-    function buildBaselineVideoWorkflow(opts) {
-        var modelName = opts.modelName || getVideoModel();
-        var seed = Math.floor(Math.random() * Math.pow(2, 32));
-        var frameCount = Math.min(MAX_VIDEO_FRAMES, Math.max(8, opts.frames || 12));
-
-        var pos = (opts.prompt || 'subtle idle breathing, locked camera, seamless loop') +
-            ', static camera, no zoom, no pan, subtle motion, anime style';
-        var neg = 'camera move, zoom, pan, blur, morphing, low quality, watermark, text, photorealistic';
-
-        console.log(
-            '[ComfyUI] Video checkpoint:', modelName,
-            '| frames:', frameCount,
-            '| size:', VIDEO_WIDTH + 'x' + VIDEO_HEIGHT
-        );
-
-        return {
-            '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: modelName } },
-            '2': { class_type: 'LoadImage', inputs: { image: opts.imageName } },
-            // Downscale before encode — huge memory saver vs 1216×832 × N frames
-            '3': {
-                class_type: 'ImageScale',
-                inputs: {
-                    image: ['2', 0],
-                    upscale_method: 'bilinear',
-                    width: VIDEO_WIDTH,
-                    height: VIDEO_HEIGHT,
-                    crop: 'center'
-                }
-            },
-            '4': { class_type: 'CLIPTextEncode', inputs: { text: pos, clip: ['1', 1] } },
-            '5': { class_type: 'CLIPTextEncode', inputs: { text: neg, clip: ['1', 1] } },
-            '6': { class_type: 'VAEEncode', inputs: { pixels: ['3', 0], vae: ['1', 2] } },
-            '7': { class_type: 'RepeatLatentBatch', inputs: { samples: ['6', 0], amount: frameCount } },
-            '8': {
-                class_type: 'KSampler',
-                inputs: {
-                    seed: seed,
-                    steps: 12,
-                    cfg: 3.0,
-                    sampler_name: 'euler',
-                    scheduler: 'normal',
-                    denoise: 0.35,
-                    model: ['1', 0],
-                    positive: ['4', 0],
-                    negative: ['5', 0],
-                    latent_image: ['7', 0]
-                }
-            },
-            '9': { class_type: 'VAEDecode', inputs: { samples: ['8', 0], vae: ['1', 2] } },
-            '10': {
-                class_type: 'VHS_VideoCombine',
-                inputs: {
-                    images: ['9', 0],
-                    frame_rate: VIDEO_FPS,
-                    loop_count: 0,
-                    filename_prefix: 'ASAdventurer_vid',
-                    format: 'video/h264-mp4',
-                    pingpong: false,
-                    save_output: true
-                }
-            }
-        };
-    }
-
     async function generateVideo(opts) {
         opts = opts || {};
         var onProgress = opts.onProgress;
-        onProgress && onProgress({ stage: 'upload' });
-
         var modelName = getVideoModel();
-        if (/ICLoRA|ic-lora/i.test(modelName)) {
-            modelName = getCheckpoint();
-            console.warn('[ComfyUI] Rejected IC-LoRA as video checkpoint; using', modelName);
+        if (/ICLoRA|ic-lora/i.test(modelName)) modelName = getCheckpoint();
+
+        onProgress && onProgress({ stage: 'upload' });
+        var baseName = await uploadImage(opts.imageDataUrl, 'as_vid_ref_' + Date.now() + '.png');
+
+        var frameCount = VIDEO_FRAME_COUNT;
+        var frameFiles = [];
+        var baseSeed = Math.floor(Math.random() * Math.pow(2, 32));
+
+        console.log('[ComfyUI] Sequential video:', frameCount, 'frames @', VIDEO_WIDTH + 'x' + VIDEO_HEIGHT, 'model', modelName);
+
+        for (var f = 0; f < frameCount; f++) {
+            onProgress && onProgress({
+                stage: 'polling',
+                attempt: f + 1,
+                detail: 'frame ' + (f + 1) + '/' + frameCount
+            });
+
+            var wf = buildSingleFrameImg2Img({
+                prompt: opts.prompt || 'subtle idle breathing animation, locked camera, seamless loop',
+                imageName: baseName,
+                modelName: modelName,
+                seed: baseSeed + f * 17
+            });
+
+            var outs = await queueAndWait(wf, function (p) {
+                if (p.stage === 'polling') {
+                    onProgress && onProgress({
+                        stage: 'polling',
+                        attempt: f + 1,
+                        detail: 'frame ' + (f + 1) + '/' + frameCount + ' step-poll ' + (p.attempt || 0)
+                    });
+                }
+            });
+
+            var frameMeta = outs.find(function (o) { return !o.isVideo; }) || outs[0];
+            if (!frameMeta) throw new Error('No frame output from ComfyUI');
+
+            // Prefer using the output filename already in ComfyUI output folder for VHS
+            // But VHS LoadImage looks in input/ — so re-upload the pixels into input/
+            var fetched = await fetchOutput(frameMeta);
+            var uploadedFrame = await uploadImage(
+                fetched.dataUrl,
+                'as_vframe_' + Date.now() + '_' + f + '.png'
+            );
+            frameFiles.push(uploadedFrame);
         }
 
-        var uploadedName = await uploadImage(opts.imageDataUrl, 'as_vid_ref_' + Date.now() + '.png');
+        onProgress && onProgress({ stage: 'polling', attempt: frameCount, detail: 'combining frames' });
+        var combineWf = buildVhsCombineWorkflow(frameFiles);
+        var combined = await queueAndWait(combineWf, onProgress);
 
-        // Ignore long duration for memory — short idle loop only
-        var frames = Math.min(MAX_VIDEO_FRAMES, Math.max(8, Math.round(Math.min(opts.duration || 2, 2) * VIDEO_FPS)));
-
-        var workflow = buildBaselineVideoWorkflow({
-            prompt: opts.prompt || 'subtle idle breathing animation, locked camera, seamless loop',
-            imageName: uploadedName,
-            frames: frames,
-            modelName: modelName
-        });
-
-        try {
-            var outputs = await queueAndWait(workflow, onProgress);
-        } catch (e) {
-            var m = String(e && e.message || e);
-            if (/OUT_OF_HOST_MEMORY|out of memory|OOM|level_zero/i.test(m)) {
-                throw new Error(
-                    'Out of memory on Intel Arc while generating video. ' +
-                    'Restart ComfyUI to free VRAM, then retry. ' +
-                    'Baseline video is limited to ' + MAX_VIDEO_FRAMES + ' frames @ ' +
-                    VIDEO_WIDTH + 'x' + VIDEO_HEIGHT + '. ' +
-                    'Original error: ' + m.slice(0, 200)
-                );
-            }
-            throw e;
-        }
-
-        var vid = outputs.find(function (o) {
+        var vid = combined.find(function (o) {
             return o.isVideo || /\.(mp4|webm|gif|mkv)$/i.test(o.filename || '');
-        }) || outputs[0];
-        if (!vid) throw new Error('No video in ComfyUI output');
+        }) || combined[0];
+        if (!vid) throw new Error('No video in ComfyUI combine output');
+
         var result = await fetchOutput(vid);
         return { blob: result.blob, url: URL.createObjectURL(result.blob) };
     }
@@ -553,8 +543,8 @@
         DEFAULT_IP_WEIGHT: DEFAULT_IP_WEIGHT,
         DEFAULT_SPRITE_W: DEFAULT_SPRITE_W,
         DEFAULT_SPRITE_H: DEFAULT_SPRITE_H,
-        MAX_VIDEO_FRAMES: MAX_VIDEO_FRAMES
+        MAX_VIDEO_FRAMES: VIDEO_FRAME_COUNT
     };
 
-    console.log('[ComfyUI] Client ready (Pony + IP-Adapter + Arc-safe video)');
+    console.log('[ComfyUI] Client ready (Pony + IP-Adapter + sequential Arc video)');
 })();
