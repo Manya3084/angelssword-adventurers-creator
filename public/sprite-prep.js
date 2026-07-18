@@ -8,7 +8,8 @@
     let charRefBase64 = null;
     let styleRefBase64 = null;
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
-    let generatedResults = []; // Store generated images for selection
+    let generatedResults = [];
+    let currentSelectedResult = null;
 
     function getGrokTokenInfo() {
         const manualKey = localStorage.getItem('xai_api_key');
@@ -138,6 +139,17 @@
         const genBtn = document.getElementById('sgGenerateBtn');
         if (genBtn) genBtn.addEventListener('click', handleGenerate);
 
+        // Handoff buttons
+        const toManualBtn = document.getElementById('sgToManualBtn');
+        if (toManualBtn) {
+            toManualBtn.addEventListener('click', handoffToManual);
+        }
+
+        const handoffBtn = document.getElementById('sgHandoffBtn');
+        if (handoffBtn) {
+            handoffBtn.addEventListener('click', handoffToVideoGen);
+        }
+
         updateGenerateButtonLabel();
     }
 
@@ -147,6 +159,71 @@
         if (aiProvider === 'comfyui') btn.innerHTML = '🖥️ Generate Sprite (ComfyUI)';
         else if (aiProvider === 'grok') btn.innerHTML = '✨ Generate Sprite (Grok Imagine)';
         else btn.innerHTML = '✨ Generate Sprite (OpenAI)';
+    }
+
+    function handoffToManual() {
+        if (!currentSelectedResult || !currentSelectedResult.imageSrc) {
+            alert('Please select a generated image first.');
+            return;
+        }
+
+        // Switch to Manual mode
+        const modeSelector = document.getElementById('spritePrepMode');
+        const manualMode = document.getElementById('spriteManualMode');
+        const generateMode = document.getElementById('spriteGenerateMode');
+
+        if (modeSelector) modeSelector.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        const manualBtn = modeSelector ? modeSelector.querySelector('[data-mode="manual"]') : null;
+        if (manualBtn) manualBtn.classList.add('active');
+
+        if (manualMode) manualMode.classList.remove('hidden');
+        if (generateMode) generateMode.classList.add('hidden');
+
+        // Load into manual canvas
+        const canvas = document.getElementById('spCanvas');
+        if (canvas) {
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            img.onload = () => {
+                ctx.fillStyle = selectedKeyColor;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+                const drawW = img.width * scale;
+                const drawH = img.height * scale;
+                const x = (canvas.width - drawW) / 2;
+                const y = (canvas.height - drawH) / 2;
+
+                ctx.drawImage(img, x, y, drawW, drawH);
+            };
+            img.src = currentSelectedResult.imageSrc;
+        }
+
+        // Also set as spriteImage for further use
+        spriteImage = currentSelectedResult.imageSrc;
+    }
+
+    function handoffToVideoGen() {
+        if (!currentSelectedResult || !currentSelectedResult.imageSrc) {
+            alert('Please select a generated image first.');
+            return;
+        }
+
+        // Switch to Video Gen tab
+        const tabBar = document.getElementById('tabBar');
+        if (tabBar) {
+            const videoGenTab = tabBar.querySelector('[data-tab="tab-video-gen"]');
+            if (videoGenTab) videoGenTab.click();
+        }
+
+        // TODO: Pass the image to Video Gen reference area
+        // For now we just switch tabs. Full handoff can be improved later.
+        setTimeout(() => {
+            const status = document.getElementById('vgStatus');
+            if (status) {
+                status.innerHTML = '<span class="status-msg info">📌 Reference image ready from AI Generate. Upload it in Reference Image section above.</span>';
+            }
+        }, 500);
     }
 
     async function handleGenerate() {
@@ -160,6 +237,7 @@
         if (resultsSection) resultsSection.classList.add('hidden');
         if (resultsGrid) resultsGrid.innerHTML = '';
         generatedResults = [];
+        currentSelectedResult = null;
 
         try {
             if (aiProvider === 'comfyui') {
@@ -172,11 +250,6 @@
 
             if (resultsSection && resultsGrid && resultsGrid.children.length > 0) {
                 resultsSection.classList.remove('hidden');
-                // Auto-select first result
-                const firstCard = resultsGrid.querySelector('.result-card');
-                if (firstCard) {
-                    selectResult(firstCard, generatedResults[0]);
-                }
             }
         } catch (e) {
             if (status) { status.innerHTML = '❌ ' + e.message; status.style.color = 'var(--red, red)'; }
@@ -222,24 +295,22 @@
         card.appendChild(img);
         card.appendChild(btnGroup);
 
-        // Click on image also selects
         img.onclick = () => selectResult(card, resultData);
 
         return card;
     }
 
     function selectResult(cardElement, resultData) {
-        // Deselect all
         document.querySelectorAll('#sgResultsGrid .result-card').forEach(c => {
             c.style.border = '1px solid var(--border)';
             c.style.boxShadow = 'none';
         });
 
-        // Highlight selected
         cardElement.style.border = '2px solid var(--accent-gold)';
         cardElement.style.boxShadow = '0 0 0 3px rgba(219, 184, 88, 0.2)';
 
-        // Update preview canvas
+        currentSelectedResult = resultData;
+
         const canvas = document.getElementById('sgCanvas');
         if (canvas && resultData && resultData.imageSrc) {
             const ctx = canvas.getContext('2d');
@@ -248,7 +319,6 @@
                 ctx.fillStyle = selectedKeyColor;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-                // Scale to fit while maintaining aspect ratio
                 const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
                 const drawW = img.width * scale;
                 const drawH = img.height * scale;
@@ -343,11 +413,10 @@
             }
         }
 
-        throw new Error('Grok generation failed. Try an xAI API key from console.x.ai.');
+        throw new Error('Grok generation failed. Try using an xAI API key from console.x.ai.');
     }
 
     async function generateComfyUI(status) {
-        // ComfyUI still limited to status only (filenames)
         const baseUrl = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
         const promptText = buildPrompt();
@@ -381,8 +450,9 @@
                         body: JSON.stringify({ baseUrl, path: `/history/${pid}`, method: 'GET' })
                     });
                     const hist = await h.json();
-                    if (hist[pid]?.outputs) {
-                        if (status) status.innerHTML = '✅ ComfyUI complete (check output folder)';
+                    if (hist[pid]?.outputs?.["9"]?.images?.[0]) {
+                        const filename = hist[pid].outputs["9"].images[0].filename;
+                        if (status) status.innerHTML = `✅ Saved as ${filename} (check ComfyUI output folder)`;
                         return;
                     }
                 } catch {}
