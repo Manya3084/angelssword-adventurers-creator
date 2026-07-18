@@ -1,0 +1,1 @@
+<full updated content of comfyui-bridge.js with video generation removed>
