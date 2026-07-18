@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  as-adventurer:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      # Shared provider tokens (all users on the server will use these)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - COMFYUI_URL=http://comfyui:8188
+    depends_on:
+      - comfyui
+    restart: unless-stopped
+
+  comfyui:
+    image: yanwk/comfyui-boot:xpu   # or comfyui/comfyui:latest for NVIDIA
+    ports:
+      - "8188:8188"
+    volumes:
+      - comfyui_models:/root/ComfyUI/models
+      - comfyui_output:/root/ComfyUI/output
+    environment:
+      - CLI_ARGS=--use-pytorch-cross-attention --bf16-unet
+    restart: unless-stopped
+    # For Intel Arc:
+    devices:
+      - /dev/dri:/dev/dri
+    ipc: host
+    shm_size: "16gb"
+
+volumes:
+  comfyui_models:
+  comfyui_output:
