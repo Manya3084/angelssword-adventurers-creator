@@ -419,7 +419,6 @@
         throw new Error('Grok generation failed. Use an xAI API key from console.x.ai.');
     }
 
-    // Upload image to ComfyUI and return the filename
     async function uploadImageToComfy(baseUrl, dataUrl, filename) {
         const res = await fetch('/api/comfyui/upload', {
             method: 'POST',
@@ -432,7 +431,6 @@
         });
         if (!res.ok) throw new Error('Failed to upload reference image to ComfyUI');
         const data = await res.json();
-        // ComfyUI usually returns { name: "filename.png", subfolder: "", type: "input" }
         return data.name || data.filename || filename;
     }
 
@@ -442,7 +440,6 @@
 
         if (status) status.innerHTML = '⏳ Preparing IP-Adapter + Pony workflow...';
 
-        // Upload character reference if available
         let refFilename = null;
         if (charRefBase64) {
             try {
@@ -456,32 +453,34 @@
         const positiveText = buildComfyPrompt();
         const negativeText = 'score_6, score_5, score_4, blurry, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, artist name, black background, solid black, empty, pure black';
 
-        // -------------------------------------------------------
-        // Workflow: IP-Adapter Advanced + Pony @ 1216x832
-        // This is the original intended pipeline
-        // -------------------------------------------------------
         let wf;
+        let saveNodeId;
 
         if (refFilename) {
-            // Full IP-Adapter workflow
+            // IP-Adapter workflow using the model that actually exists on this machine
             wf = {
-                "1": { // Checkpoint
+                "1": {
                     "class_type": "CheckpointLoaderSimple",
                     "inputs": { "ckpt_name": ckpt }
                 },
-                "2": { // Load the uploaded character reference
+                "2": {
                     "class_type": "LoadImage",
                     "inputs": { "image": refFilename }
                 },
-                "3": { // IP-Adapter Model Loader (common name)
+                "3": {
                     "class_type": "IPAdapterModelLoader",
-                    "inputs": { "ipadapter_file": "ip-adapter-plus_sdxl_vit-h.safetensors" }
+                    "inputs": {
+                        // This is the SDXL model that exists on the user's system
+                        "ipadapter_file": "ip-adapter-plus-face_sdxl_vit-h.safetensors"
+                    }
                 },
-                "4": { // CLIP Vision
+                "4": {
                     "class_type": "CLIPVisionLoader",
-                    "inputs": { "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" }
+                    "inputs": {
+                        "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+                    }
                 },
-                "5": { // IPAdapter Advanced
+                "5": {
                     "class_type": "IPAdapterAdvanced",
                     "inputs": {
                         "model": ["1", 0],
@@ -496,19 +495,19 @@
                         "embeds_scaling": "V only"
                     }
                 },
-                "6": { // Positive prompt
+                "6": {
                     "class_type": "CLIPTextEncode",
                     "inputs": { "text": positiveText, "clip": ["1", 1] }
                 },
-                "7": { // Negative prompt
+                "7": {
                     "class_type": "CLIPTextEncode",
                     "inputs": { "text": negativeText, "clip": ["1", 1] }
                 },
-                "8": { // Empty latent @ 1216x832
+                "8": {
                     "class_type": "EmptyLatentImage",
                     "inputs": { "width": 1216, "height": 832, "batch_size": 1 }
                 },
-                "9": { // KSampler
+                "9": {
                     "class_type": "KSampler",
                     "inputs": {
                         "seed": Math.floor(Math.random() * 1e9),
@@ -517,23 +516,24 @@
                         "sampler_name": "dpmpp_2m",
                         "scheduler": "karras",
                         "denoise": 1,
-                        "model": ["5", 0],   // from IPAdapterAdvanced
+                        "model": ["5", 0],
                         "positive": ["6", 0],
                         "negative": ["7", 0],
                         "latent_image": ["8", 0]
                     }
                 },
-                "10": { // VAE Decode
+                "10": {
                     "class_type": "VAEDecode",
                     "inputs": { "samples": ["9", 0], "vae": ["1", 2] }
                 },
-                "11": { // Save
+                "11": {
                     "class_type": "SaveImage",
                     "inputs": { "filename_prefix": "as_adventurer", "images": ["10", 0] }
                 }
             };
+            saveNodeId = "11";
         } else {
-            // Fallback pure text-to-image if no reference was uploaded
+            // Fallback text-only
             wf = {
                 "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
                 "2": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
@@ -557,10 +557,8 @@
                 "6": { "class_type": "VAEDecode", "inputs": { "samples": ["5", 0], "vae": ["1", 2] } },
                 "7": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["6", 0] } }
             };
+            saveNodeId = "7";
         }
-
-        // Find the SaveImage node id for later
-        const saveNodeId = refFilename ? "11" : "7";
 
         const q = await fetch('/api/comfyui/proxy', {
             method: 'POST',
