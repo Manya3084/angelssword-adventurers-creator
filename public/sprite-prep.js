@@ -11,7 +11,7 @@
     let generatedResults = [];
     let currentSelectedResult = null;
 
-    // Default values that match the placeholders in the HTML
+    // Default values that match the placeholders
     const DEFAULTS = {
         name: 'Mirrime the Mage',
         desc: 'Blue hair, red cape, golden feather cap, adventurer outfit',
@@ -178,7 +178,6 @@
         else btn.innerHTML = '✨ Generate Sprite (OpenAI)';
     }
 
-    // Returns the actual value the user typed, or the strong default if the field is empty
     function getFieldValue(id, defaultValue) {
         const el = document.getElementById(id);
         if (!el) return defaultValue;
@@ -186,7 +185,6 @@
         return val.length > 0 ? val : defaultValue;
     }
 
-    // Normal prompt used by OpenAI / Grok
     function buildPrompt() {
         const name = getFieldValue('sgCharName', DEFAULTS.name);
         const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
@@ -200,7 +198,6 @@
         return p;
     }
 
-    // Special prompt for Pony Diffusion V6 XL
     function buildComfyPrompt() {
         const name = getFieldValue('sgCharName', DEFAULTS.name);
         const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
@@ -429,21 +426,23 @@
 
     async function generateComfyUI(status, grid) {
         const base = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
+        // Prefer a more stable default if the user hasn't set one
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
 
         const positiveText = buildComfyPrompt();
 
         const negativeText = 'score_6, score_5, score_4, blurry, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, artist name, black background, solid black, empty, pure black';
 
+        // More stable settings for Intel Arc (lower CFG + safer sampler)
         const wf = {
             "3": {
                 "class_type": "KSampler",
                 "inputs": {
                     "seed": Math.floor(Math.random() * 1e9),
-                    "steps": 25,
-                    "cfg": 6.5,
-                    "sampler_name": "euler_ancestral",
-                    "scheduler": "normal",
+                    "steps": 28,
+                    "cfg": 4.5,                    // Lower CFG helps prevent NaNs on Arc
+                    "sampler_name": "dpmpp_2m",   // More stable than euler_ancestral on many Arc setups
+                    "scheduler": "karras",
                     "denoise": 1,
                     "model": ["4", 0],
                     "positive": ["6", 0],
@@ -485,11 +484,11 @@
         if (!q.ok) throw new Error('ComfyUI queue failed');
         const qd = await q.json();
         const pid = qd.prompt_id;
-        if (status) status.innerHTML = '⏳ Generating with Pony...';
+        if (status) status.innerHTML = '⏳ Generating with Pony (stable settings)...';
 
         if (!pid) return;
 
-        for (let i = 0; i < 25; i++) {
+        for (let i = 0; i < 30; i++) {
             await new Promise(r => setTimeout(r, 2000));
             try {
                 const h = await fetch('/api/comfyui/proxy', {
