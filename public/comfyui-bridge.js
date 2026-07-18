@@ -75,7 +75,7 @@
         const saveBtn = document.getElementById('comfyuiSaveBtn');
         const statusEl = document.getElementById('comfyuiStatus');
 
-        if (!urlInput || !weightInput) return;
+        if (!urlInput) return;
 
         weightInput.addEventListener('input', () => {
             if (weightValue) weightValue.textContent = weightInput.value;
@@ -92,10 +92,18 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ baseUrl: urlInput.value })
                 });
-                const data = await resp.json();
 
-                if (resp.ok) {
-                    statusEl.innerHTML = '✅ Connected to ComfyUI';
+                let data;
+                const text = await resp.text();
+
+                try {
+                    data = JSON.parse(text);
+                } catch {
+                    data = { error: text.substring(0, 200) };
+                }
+
+                if (resp.ok && !data.error) {
+                    statusEl.innerHTML = '✅ Connected';
                     statusEl.className = 'text-sm text-green';
                 } else {
                     statusEl.innerHTML = '❌ ' + (data.error || 'Connection failed');
@@ -115,12 +123,10 @@
             setSetting('IP_WEIGHT', weightInput.value);
 
             if (statusEl) {
-                statusEl.innerHTML = '✅ Settings saved';
+                statusEl.innerHTML = '✅ Saved';
                 statusEl.className = 'text-sm text-green';
                 setTimeout(() => {
-                    if (statusEl && statusEl.innerHTML.includes('saved')) {
-                        statusEl.innerHTML = '';
-                    }
+                    if (statusEl) statusEl.innerHTML = '';
                 }, 2000);
             }
         });
@@ -129,17 +135,24 @@
     }
 
     function injectComfyUISettings() {
-        // Try multiple possible containers
-        let container = document.querySelector('#tab-settings .settings-section');
-        if (!container) container = document.getElementById('settingsContent');
-        if (!container) container = document.querySelector('#tab-settings');
-
-        if (!container) return false;
+        const settingsSection = document.querySelector('#tab-settings .settings-section');
+        if (!settingsSection) return false;
         if (document.getElementById('comfyuiSettingsPanel')) return true;
+
+        // Find the Grok panel and insert after it
+        const grokPanel = Array.from(settingsSection.children).find(el => 
+            el.textContent && el.textContent.includes('Grok (SuperGrok OAuth)')
+        );
 
         const wrapper = document.createElement('div');
         wrapper.innerHTML = buildComfyUISettingsHTML();
-        container.appendChild(wrapper.firstElementChild);
+        const panel = wrapper.firstElementChild;
+
+        if (grokPanel && grokPanel.nextSibling) {
+            settingsSection.insertBefore(panel, grokPanel.nextSibling);
+        } else {
+            settingsSection.appendChild(panel);
+        }
 
         wireComfyUISettings();
         return true;
@@ -148,38 +161,47 @@
     function tryInject() {
         if (injectComfyUISettings()) return;
 
-        // Retry a few times in case the DOM is still loading
         let attempts = 0;
         const interval = setInterval(() => {
             attempts++;
-            if (injectComfyUISettings() || attempts > 8) {
+            if (injectComfyUISettings() || attempts > 6) {
                 clearInterval(interval);
             }
-        }, 400);
+        }, 500);
     }
 
-    // Watch for Settings tab becoming active
+    // Watch for Settings tab
     const observer = new MutationObserver(() => {
         const settingsTab = document.getElementById('tab-settings');
         if (settingsTab && settingsTab.classList.contains('active')) {
             tryInject();
         }
     });
-
     observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class'] });
 
-    // Also try on load and when clicking Settings tab
+    // Click handler for Settings tab
     document.addEventListener('click', (e) => {
         if (e.target.closest('[data-tab="tab-settings"]')) {
-            setTimeout(tryInject, 300);
+            setTimeout(tryInject, 400);
         }
     });
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => setTimeout(tryInject, 800));
+        document.addEventListener('DOMContentLoaded', () => setTimeout(tryInject, 1000));
     } else {
-        setTimeout(tryInject, 800);
+        setTimeout(tryInject, 1000);
     }
 
-    console.log('[ComfyUI Bridge] Loaded - will inject settings when Settings tab is opened');
+    // Make Settings scrollable if needed
+    const style = document.createElement('style');
+    style.textContent = `
+        #tab-settings { 
+            max-height: calc(100vh - 120px); 
+            overflow-y: auto; 
+            padding-bottom: 40px;
+        }
+    `;
+    document.head.appendChild(style);
+
+    console.log('[ComfyUI Bridge] Loaded with improved injection');
 })();
