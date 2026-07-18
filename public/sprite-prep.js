@@ -16,11 +16,33 @@
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
 
     function getGrokAccessToken() {
-        // Try common storage keys used by the OAuth flow
-        return localStorage.getItem('grok_access_token') ||
-               localStorage.getItem('xai_access_token') ||
-               localStorage.getItem('access_token') ||
-               null;
+        // Try many possible keys used by xAI/SuperGrok OAuth flows
+        const possibleKeys = [
+            'grok_access_token',
+            'xai_access_token',
+            'access_token',
+            'grok_token',
+            'superGrokToken',
+            'grokSession',
+            'xai_token',
+            'oauth_token'
+        ];
+
+        for (const key of possibleKeys) {
+            const val = localStorage.getItem(key);
+            if (val) return val;
+        }
+
+        // Also try to find any key that looks like a JWT
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            const val = localStorage.getItem(key);
+            if (val && val.length > 100 && val.split('.').length === 3) {
+                return val; // looks like a JWT
+            }
+        }
+
+        return null;
     }
 
     function initSpritePrep() {
@@ -341,7 +363,7 @@
             }
         };
 
-        const res = await fetch('/api/comfyui/proxy', {
+        const queueRes = await fetch('/api/comfyui/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -352,17 +374,50 @@
             })
         });
 
-        if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`ComfyUI failed: ${res.status} ${text}`);
+        if (!queueRes.ok) {
+            const text = await queueRes.text();
+            throw new Error(`ComfyUI queue failed: ${queueRes.status} ${text}`);
         }
 
-        const data = await res.json();
-        if (statusEl) {
-            statusEl.innerHTML = data.prompt_id 
-                ? `✅ Queued in ComfyUI` 
-                : '✅ Sent to ComfyUI';
+        const queueData = await queueRes.json();
+        const promptId = queueData.prompt_id;
+
+        if (!promptId) {
+            if (statusEl) statusEl.innerHTML = '✅ Queued in ComfyUI';
+            return;
         }
+
+        if (statusEl) statusEl.innerHTML = '⏳ Waiting for ComfyUI...';
+
+        // Simple polling for result (max ~30 seconds)
+        for (let i = 0; i < 15; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+
+            try {
+                const historyRes = await fetch('/api/comfyui/proxy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        baseUrl: baseUrl,
+                        path: `/history/${promptId}`,
+                        method: 'GET'
+                    })
+                });
+
+                const history = await historyRes.json();
+                const output = history[promptId]?.outputs;
+
+                if (output) {
+                    if (statusEl) statusEl.innerHTML = '✅ ComfyUI generation complete';
+                    console.log('[ComfyUI] Generation finished', output);
+                    return;
+                }
+            } catch (e) {
+                // ignore polling errors
+            }
+        }
+
+        if (statusEl) statusEl.innerHTML = '⏳ Still processing in ComfyUI (check queue)';
     }
 
     if (document.readyState === 'loading') {
