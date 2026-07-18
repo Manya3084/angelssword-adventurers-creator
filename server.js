@@ -69,6 +69,17 @@ app.post('/api/xai/oauth/token', async (req, res) => {
     }
 });
 
+// Test Grok / xAI connection (used by Settings "Test Connection")
+app.post('/api/xai/test', async (req, res) => {
+    try {
+        // Simple test - just return success if the proxy is running.
+        // A more advanced version could validate the token by calling /v1/models
+        res.json({ ok: true, message: 'Grok proxy is reachable' });
+    } catch (err) {
+        res.status(502).json({ error: err.message });
+    }
+});
+
 // ============================================
 // OpenAI
 // ============================================
