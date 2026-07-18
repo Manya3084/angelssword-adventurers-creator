@@ -8,6 +8,7 @@
     let charRefBase64 = null;
     let styleRefBase64 = null;
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
+    let generatedResults = []; // Store generated images for selection
 
     function getGrokTokenInfo() {
         const manualKey = localStorage.getItem('xai_api_key');
@@ -158,6 +159,7 @@
         if (status) { status.innerHTML = '<span class="spinner"></span> Generating...'; status.style.color = ''; }
         if (resultsSection) resultsSection.classList.add('hidden');
         if (resultsGrid) resultsGrid.innerHTML = '';
+        generatedResults = [];
 
         try {
             if (aiProvider === 'comfyui') {
@@ -170,6 +172,11 @@
 
             if (resultsSection && resultsGrid && resultsGrid.children.length > 0) {
                 resultsSection.classList.remove('hidden');
+                // Auto-select first result
+                const firstCard = resultsGrid.querySelector('.result-card');
+                if (firstCard) {
+                    selectResult(firstCard, generatedResults[0]);
+                }
             }
         } catch (e) {
             if (status) { status.innerHTML = '❌ ' + e.message; status.style.color = 'var(--red, red)'; }
@@ -178,42 +185,80 @@
         }
     }
 
-    function displayGeneratedImage(grid, imageData, label = 'Generated') {
-        if (!grid) return;
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'result-item';
-        wrapper.style.cssText = 'cursor:pointer; border:1px solid var(--border); border-radius:8px; overflow:hidden;';
+    function createResultCard(imageSrc, index, resultData) {
+        const card = document.createElement('div');
+        card.className = 'result-card glass-panel';
+        card.style.cssText = 'padding:8px; cursor:pointer; transition:all 0.2s;';
 
         const img = document.createElement('img');
-        img.style.cssText = 'width:100%; display:block;';
+        img.src = imageSrc;
+        img.style.cssText = 'width:100%; border-radius:6px; display:block;';
 
-        if (imageData.startsWith('data:') || imageData.startsWith('http')) {
-            img.src = imageData;
-        } else {
-            // Assume base64
-            img.src = `data:image/png;base64,${imageData}`;
-        }
+        const btnGroup = document.createElement('div');
+        btnGroup.style.cssText = 'display:flex; gap:6px; margin-top:8px;';
 
-        img.onload = () => {
-            wrapper.onclick = () => {
-                const canvas = document.getElementById('sgCanvas');
-                if (canvas) {
-                    const ctx = canvas.getContext('2d');
-                    ctx.fillStyle = selectedKeyColor;
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                }
-            };
+        const downloadBtn = document.createElement('button');
+        downloadBtn.className = 'btn btn-sm btn-secondary';
+        downloadBtn.textContent = '💾 Download';
+        downloadBtn.onclick = (e) => {
+            e.stopImmediatePropagation();
+            const link = document.createElement('a');
+            link.href = imageSrc;
+            link.download = `generated_${index + 1}.png`;
+            link.click();
         };
 
-        const caption = document.createElement('div');
-        caption.style.cssText = 'padding:4px 8px; font-size:0.75rem; background:rgba(0,0,0,0.4); color:white;';
-        caption.textContent = label;
+        const selectBtn = document.createElement('button');
+        selectBtn.className = 'btn btn-sm btn-primary';
+        selectBtn.textContent = '✓ Select';
+        selectBtn.onclick = (e) => {
+            e.stopImmediatePropagation();
+            selectResult(card, resultData);
+        };
 
-        wrapper.appendChild(img);
-        wrapper.appendChild(caption);
-        grid.appendChild(wrapper);
+        btnGroup.appendChild(downloadBtn);
+        btnGroup.appendChild(selectBtn);
+
+        card.appendChild(img);
+        card.appendChild(btnGroup);
+
+        // Click on image also selects
+        img.onclick = () => selectResult(card, resultData);
+
+        return card;
+    }
+
+    function selectResult(cardElement, resultData) {
+        // Deselect all
+        document.querySelectorAll('#sgResultsGrid .result-card').forEach(c => {
+            c.style.border = '1px solid var(--border)';
+            c.style.boxShadow = 'none';
+        });
+
+        // Highlight selected
+        cardElement.style.border = '2px solid var(--accent-gold)';
+        cardElement.style.boxShadow = '0 0 0 3px rgba(219, 184, 88, 0.2)';
+
+        // Update preview canvas
+        const canvas = document.getElementById('sgCanvas');
+        if (canvas && resultData && resultData.imageSrc) {
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            img.onload = () => {
+                ctx.fillStyle = selectedKeyColor;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Scale to fit while maintaining aspect ratio
+                const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+                const drawW = img.width * scale;
+                const drawH = img.height * scale;
+                const x = (canvas.width - drawW) / 2;
+                const y = (canvas.height - drawH) / 2;
+
+                ctx.drawImage(img, x, y, drawW, drawH);
+            };
+            img.src = resultData.imageSrc;
+        }
     }
 
     async function generateOpenAI(status, resultsGrid) {
@@ -228,15 +273,21 @@
 
         if (data.data && data.data.length > 0) {
             data.data.forEach((img, i) => {
-                if (img.b64_json) {
-                    displayGeneratedImage(resultsGrid, img.b64_json, `OpenAI #${i+1}`);
-                } else if (img.url) {
-                    displayGeneratedImage(resultsGrid, img.url, `OpenAI #${i+1}`);
+                let imageSrc = null;
+                if (img.b64_json) imageSrc = `data:image/png;base64,${img.b64_json}`;
+                else if (img.url) imageSrc = img.url;
+
+                if (imageSrc) {
+                    const resultData = { imageSrc, index: i };
+                    generatedResults.push(resultData);
+
+                    const card = createResultCard(imageSrc, i, resultData);
+                    resultsGrid.appendChild(card);
                 }
             });
             if (status) status.innerHTML = `✅ Generated ${data.data.length} sprite(s)`;
         } else {
-            if (status) status.innerHTML = '✅ Done (no images returned)';
+            if (status) status.innerHTML = '✅ Done';
         }
     }
 
@@ -272,10 +323,16 @@
 
                 if (data.data && data.data.length > 0) {
                     data.data.forEach((img, i) => {
-                        if (img.b64_json) {
-                            displayGeneratedImage(resultsGrid, img.b64_json, `Grok #${i+1}`);
-                        } else if (img.url) {
-                            displayGeneratedImage(resultsGrid, img.url, `Grok #${i+1}`);
+                        let imageSrc = null;
+                        if (img.b64_json) imageSrc = `data:image/png;base64,${img.b64_json}`;
+                        else if (img.url) imageSrc = img.url;
+
+                        if (imageSrc) {
+                            const resultData = { imageSrc, index: i };
+                            generatedResults.push(resultData);
+
+                            const card = createResultCard(imageSrc, i, resultData);
+                            resultsGrid.appendChild(card);
                         }
                     });
                     if (status) status.innerHTML = `✅ Generated with ${model}`;
@@ -286,10 +343,11 @@
             }
         }
 
-        throw new Error('Failed to generate with Grok Imagine. Try using an xAI API key from console.x.ai.');
+        throw new Error('Grok generation failed. Try an xAI API key from console.x.ai.');
     }
 
     async function generateComfyUI(status) {
+        // ComfyUI still limited to status only (filenames)
         const baseUrl = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
         const promptText = buildPrompt();
@@ -324,7 +382,7 @@
                     });
                     const hist = await h.json();
                     if (hist[pid]?.outputs) {
-                        if (status) status.innerHTML = '✅ ComfyUI generation complete (check output folder)';
+                        if (status) status.innerHTML = '✅ ComfyUI complete (check output folder)';
                         return;
                     }
                 } catch {}
