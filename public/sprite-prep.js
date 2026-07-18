@@ -9,35 +9,29 @@
     let styleRefBase64 = null;
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
 
-    function getGrokAccessToken() {
-        // Priority 1: Manual xAI API key from Settings
+    function getGrokTokenInfo() {
+        // 1. Manual xAI API key (highest priority)
         const manualKey = localStorage.getItem('xai_api_key');
         if (manualKey && manualKey.startsWith('xai-')) {
-            console.log('[Grok] Using manual xAI API key');
             return { type: 'api_key', value: manualKey };
         }
 
-        // Priority 2: SuperGrok OAuth token from xai_oauth_tokens
-        const oauthRaw = localStorage.getItem('xai_oauth_tokens');
-        if (oauthRaw) {
+        // 2. SuperGrok OAuth token from xai_oauth_tokens
+        const raw = localStorage.getItem('xai_oauth_tokens');
+        if (raw) {
             try {
-                const parsed = JSON.parse(oauthRaw);
-                // Common structures: { access_token: '...' } or { token: '...' } or direct string
-                const token = parsed.access_token || parsed.token || parsed.accessToken || (typeof parsed === 'string' ? parsed : null);
+                const parsed = JSON.parse(raw);
+                const token = parsed.access_token || parsed.token || parsed.accessToken;
                 if (token) {
-                    console.log('[Grok] Using SuperGrok OAuth token from xai_oauth_tokens');
                     return { type: 'oauth', value: token };
                 }
             } catch (e) {
-                // If it's not JSON, maybe it's stored as raw string
-                if (oauthRaw.length > 50) {
-                    console.log('[Grok] Using raw token from xai_oauth_tokens');
-                    return { type: 'oauth', value: oauthRaw };
+                if (raw.length > 50) {
+                    return { type: 'oauth', value: raw };
                 }
             }
         }
 
-        console.warn('[Grok] No valid SuperGrok token or xAI API key found');
         return null;
     }
 
@@ -191,12 +185,18 @@
     }
 
     async function generateGrok(status) {
-        const tokenInfo = getGrokAccessToken();
+        const tokenInfo = getGrokTokenInfo();
         if (!tokenInfo) {
-            throw new Error('No SuperGrok token or xAI API key found. Please log in with SuperGrok or add an xAI API key in Settings.');
+            throw new Error('No SuperGrok token or xAI API key found. Please log in with SuperGrok or add a key in Settings.');
         }
 
         const prompt = buildPrompt();
+
+        const body = {
+            model: "grok-imagine-image-quality",
+            prompt: prompt,
+            n: selectedGenCount
+        };
 
         const res = await fetch('/api/xai/images/generations', {
             method: 'POST',
@@ -204,16 +204,16 @@
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${tokenInfo.value}`
             },
-            body: JSON.stringify({ prompt, n: selectedGenCount })
+            body: JSON.stringify(body)
         });
 
         if (!res.ok) {
-            const errText = await res.text();
-            throw new Error(`Grok error: ${errText}`);
+            const err = await res.text();
+            throw new Error(`Grok error: ${err}`);
         }
 
         const data = await res.json();
-        if (status) status.innerHTML = data.data?.length ? `✅ Generated ${data.data.length} sprite(s) with Grok` : '✅ Done';
+        if (status) status.innerHTML = data.data?.length ? `✅ Generated ${data.data.length} sprite(s) with Grok Imagine` : '✅ Done';
     }
 
     async function generateComfyUI(status) {
