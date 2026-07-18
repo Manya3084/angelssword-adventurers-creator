@@ -1,37 +1,20 @@
  (function() {
     'use strict';
 
-    // State
     let spriteImage = null;
-    let spriteFileName = '';
     let selectedKeyColor = '#00FF00';
     let selectedRaceMode = 'normal';
     let selectedGenCount = 1;
-    let offset = parseInt(localStorage.getItem('sp-offset')) || 0;
-    let zoom = parseInt(localStorage.getItem('sp-zoom')) || 100;
-
-    // Generative state
     let charRefBase64 = null;
     let styleRefBase64 = null;
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
 
     function getGrokAccessToken() {
-        const possibleKeys = [
-            'grok_access_token', 'xai_access_token', 'access_token',
-            'grok_token', 'superGrokToken', 'grokSession', 'xai_token', 'oauth_token'
-        ];
-
-        for (const key of possibleKeys) {
-            const val = localStorage.getItem(key);
-            if (val) return val;
-        }
-
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            const val = localStorage.getItem(key);
-            if (val && val.length > 100 && val.split('.').length === 3) {
-                return val;
-            }
+        const keys = ['grok_access_token','xai_access_token','access_token','grok_token','superGrokToken','grokSession'];
+        for (const k of keys) { const v = localStorage.getItem(k); if (v) return v; }
+        for (let i=0; i<localStorage.length; i++) {
+            const k = localStorage.key(i); const v = localStorage.getItem(k);
+            if (v && v.length > 80 && v.split('.').length === 3) return v;
         }
         return null;
     }
@@ -45,10 +28,8 @@
             modeSelector.addEventListener('click', (e) => {
                 const btn = e.target.closest('.mode-btn');
                 if (!btn) return;
-
                 modeSelector.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-
                 if (btn.dataset.mode === 'manual') {
                     manualMode.classList.remove('hidden');
                     generateMode.classList.add('hidden');
@@ -58,139 +39,92 @@
                 }
             });
         }
-
         initAIGenerateMode();
-        console.log('[SpritePrep] Initialized');
     }
 
     function initAIGenerateMode() {
         // Race Mode
-        const raceModeContainer = document.getElementById('sgRaceMode');
-        if (raceModeContainer) {
-            raceModeContainer.addEventListener('click', (e) => {
+        const race = document.getElementById('sgRaceMode');
+        if (race) {
+            race.addEventListener('click', (e) => {
                 const btn = e.target.closest('.mode-btn');
                 if (!btn) return;
-
-                raceModeContainer.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                race.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-
                 selectedRaceMode = btn.dataset.mode || 'normal';
             });
-
-            const defaultBtn = raceModeContainer.querySelector('.mode-btn.active') || raceModeContainer.querySelector('.mode-btn');
-            if (defaultBtn) {
-                defaultBtn.classList.add('active');
-                selectedRaceMode = defaultBtn.dataset.mode || 'normal';
-            }
+            const def = race.querySelector('.mode-btn.active') || race.querySelector('.mode-btn');
+            if (def) { def.classList.add('active'); selectedRaceMode = def.dataset.mode || 'normal'; }
         }
 
         // Key Color
-        const colorSwatches = document.getElementById('sgColorSwatches');
-        if (colorSwatches) {
-            colorSwatches.addEventListener('click', (e) => {
-                const swatch = e.target.closest('.color-swatch');
-                if (!swatch) return;
-
-                colorSwatches.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
-                swatch.classList.add('selected');
-
-                selectedKeyColor = swatch.dataset.color || '#00FF00';
+        const colors = document.getElementById('sgColorSwatches');
+        if (colors) {
+            colors.addEventListener('click', (e) => {
+                const s = e.target.closest('.color-swatch');
+                if (!s) return;
+                colors.querySelectorAll('.color-swatch').forEach(x => x.classList.remove('selected'));
+                s.classList.add('selected');
+                selectedKeyColor = s.dataset.color || '#00FF00';
             });
-
-            const initialSwatch = colorSwatches.querySelector('.color-swatch.selected') || colorSwatches.querySelector('.color-swatch');
-            if (initialSwatch) {
-                initialSwatch.classList.add('selected');
-                selectedKeyColor = initialSwatch.dataset.color || '#00FF00';
-            }
+            const init = colors.querySelector('.color-swatch.selected') || colors.querySelector('.color-swatch');
+            if (init) { init.classList.add('selected'); selectedKeyColor = init.dataset.color || '#00FF00'; }
         }
 
-        // Simultaneous Generations
-        const genCountContainer = document.getElementById('sgGenCount');
-        if (genCountContainer) {
-            genCountContainer.addEventListener('click', (e) => {
-                const btn = e.target.closest('.gen-count-btn');
-                if (!btn) return;
-
-                genCountContainer.querySelectorAll('.gen-count-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-
-                selectedGenCount = parseInt(btn.dataset.count) || 1;
+        // Generation Count
+        const countContainer = document.getElementById('sgGenCount');
+        if (countContainer) {
+            countContainer.addEventListener('click', (e) => {
+                const b = e.target.closest('.gen-count-btn');
+                if (!b) return;
+                countContainer.querySelectorAll('.gen-count-btn').forEach(x => x.classList.remove('active'));
+                b.classList.add('active');
+                selectedGenCount = parseInt(b.dataset.count) || 1;
             });
-
-            const defaultBtn = genCountContainer.querySelector('.gen-count-btn.active') || genCountContainer.querySelector('.gen-count-btn');
-            if (defaultBtn) {
-                defaultBtn.classList.add('active');
-                selectedGenCount = parseInt(defaultBtn.dataset.count) || 1;
-            }
+            const def = countContainer.querySelector('.gen-count-btn.active') || countContainer.querySelector('.gen-count-btn');
+            if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
         }
 
-        // Character Reference
-        const charRefInput = document.getElementById('sgCharRefInput');
-        const charRefPreview = document.getElementById('sgCharRefPreview');
-
-        if (charRefInput) {
-            charRefInput.addEventListener('change', (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    charRefBase64 = ev.target.result;
-                    if (charRefPreview) {
-                        charRefPreview.innerHTML = `<img src="${charRefBase64}" style="max-height:120px;border-radius:8px;border:1px solid var(--border);">`;
-                        charRefPreview.classList.remove('hidden');
-                    }
-                };
-                reader.readAsDataURL(file);
+        // Uploads
+        const charIn = document.getElementById('sgCharRefInput');
+        const charPrev = document.getElementById('sgCharRefPreview');
+        if (charIn) {
+            charIn.addEventListener('change', e => {
+                const f = e.target.files[0]; if (!f) return;
+                const r = new FileReader();
+                r.onload = ev => { charRefBase64 = ev.target.result; if (charPrev) { charPrev.innerHTML = `<img src="${charRefBase64}" style="max-height:120px;border-radius:8px">`; charPrev.classList.remove('hidden'); } };
+                r.readAsDataURL(f);
             });
         }
 
-        // Style Reference
-        const styleRefInput = document.getElementById('sgStyleRefInput');
-        const styleRefPreview = document.getElementById('sgStyleRefPreview');
-
-        if (styleRefInput) {
-            styleRefInput.addEventListener('change', (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    styleRefBase64 = ev.target.result;
-                    if (styleRefPreview) {
-                        styleRefPreview.innerHTML = `<img src="${styleRefBase64}" style="max-height:120px;border-radius:8px;border:1px solid var(--border);">`;
-                        styleRefPreview.classList.remove('hidden');
-                    }
-                };
-                reader.readAsDataURL(file);
+        const styleIn = document.getElementById('sgStyleRefInput');
+        const stylePrev = document.getElementById('sgStyleRefPreview');
+        if (styleIn) {
+            styleIn.addEventListener('change', e => {
+                const f = e.target.files[0]; if (!f) return;
+                const r = new FileReader();
+                r.onload = ev => { styleRefBase64 = ev.target.result; if (stylePrev) { stylePrev.innerHTML = `<img src="${styleRefBase64}" style="max-height:120px;border-radius:8px">`; stylePrev.classList.remove('hidden'); } };
+                r.readAsDataURL(f);
             });
         }
 
-        // Provider buttons
-        const providerContainer = document.getElementById('sgProvider');
-        if (providerContainer) {
-            providerContainer.addEventListener('click', (e) => {
-                const btn = e.target.closest('.mode-btn');
-                if (!btn) return;
-
-                providerContainer.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-
-                aiProvider = btn.dataset.provider;
+        // Provider
+        const prov = document.getElementById('sgProvider');
+        if (prov) {
+            prov.addEventListener('click', e => {
+                const b = e.target.closest('.mode-btn'); if (!b) return;
+                prov.querySelectorAll('.mode-btn').forEach(x => x.classList.remove('active'));
+                b.classList.add('active');
+                aiProvider = b.dataset.provider;
                 localStorage.setItem('sg_ai_provider', aiProvider);
                 updateGenerateButtonLabel();
             });
-
-            const initialBtn = providerContainer.querySelector(`[data-provider="${aiProvider}"]`);
-            if (initialBtn) {
-                providerContainer.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-                initialBtn.classList.add('active');
-            }
+            const initBtn = prov.querySelector(`[data-provider="${aiProvider}"]`);
+            if (initBtn) { prov.querySelectorAll('.mode-btn').forEach(x => x.classList.remove('active')); initBtn.classList.add('active'); }
         }
 
-        // Generate button
-        const generateBtn = document.getElementById('sgGenerateBtn');
-        if (generateBtn) {
-            generateBtn.addEventListener('click', handleGenerate);
-        }
+        const genBtn = document.getElementById('sgGenerateBtn');
+        if (genBtn) genBtn.addEventListener('click', handleGenerate);
 
         updateGenerateButtonLabel();
     }
@@ -198,84 +132,108 @@
     function updateGenerateButtonLabel() {
         const btn = document.getElementById('sgGenerateBtn');
         if (!btn) return;
-
-        if (aiProvider === 'comfyui') {
-            btn.innerHTML = '🖥️ Generate Sprite (ComfyUI)';
-        } else if (aiProvider === 'grok') {
-            btn.innerHTML = '✨ Generate Sprite (Grok Imagine)';
-        } else {
-            btn.innerHTML = '✨ Generate Sprite (OpenAI)';
-        }
+        if (aiProvider === 'comfyui') btn.innerHTML = '🖥️ Generate Sprite (ComfyUI)';
+        else if (aiProvider === 'grok') btn.innerHTML = '✨ Generate Sprite (Grok Imagine)';
+        else btn.innerHTML = '✨ Generate Sprite (OpenAI)';
     }
 
     async function handleGenerate() {
-        const statusEl = document.getElementById('sgStatus');
+        const status = document.getElementById('sgStatus');
         const btn = document.getElementById('sgGenerateBtn');
-
         if (btn) btn.disabled = true;
-        if (statusEl) {
-            statusEl.innerHTML = '<span class="spinner"></span> Generating...';
-            statusEl.style.color = '';
-        }
+        if (status) { status.innerHTML = '<span class="spinner"></span> Generating...'; status.style.color = ''; }
 
         try {
-            if (aiProvider === 'comfyui') {
-                await generateComfyUI(statusEl);
-            } else if (aiProvider === 'grok') {
-                await generateGrok(statusEl);
-            } else {
-                await generateOpenAI(statusEl);
-            }
+            if (aiProvider === 'comfyui') await generateComfyUI(status);
+            else if (aiProvider === 'grok') await generateGrok(status);
+            else await generateOpenAI(status);
         } catch (e) {
-            console.error(e);
-            if (statusEl) {
-                statusEl.innerHTML = '❌ ' + (e.message || e);
-                statusEl.style.color = 'var(--red, red)';
-            }
+            if (status) { status.innerHTML = '❌ ' + e.message; status.style.color = 'var(--red, red)'; }
         } finally {
             if (btn) btn.disabled = false;
         }
     }
 
-    async function generateOpenAI(statusEl) {
-        const name = document.getElementById('sgCharName')?.value || 'character';
-        const desc = document.getElementById('sgCharDesc')?.value || '';
-
-        const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style. Race: ${selectedRaceMode}.`;
-
+    async function generateOpenAI(status) {
+        const prompt = `Full body clean sprite of ${document.getElementById('sgCharName')?.value || 'character'}. ${document.getElementById('sgCharDesc')?.value || ''}`;
         const res = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: 'gpt-image-2',
-                prompt: prompt,
-                n: selectedGenCount,
-                size: '1024x1024'
-            })
+            body: JSON.stringify({ model: 'gpt-image-2', prompt, n: selectedGenCount, size: '1024x1024' })
         });
-
-        if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`OpenAI failed: ${res.status} ${text}`);
-        }
-
+        if (!res.ok) throw new Error('OpenAI error: ' + await res.text());
         const data = await res.json();
-        if (statusEl) {
-            statusEl.innerHTML = (data.data && data.data.length > 0)
-                ? `✅ Generated ${data.data.length} sprite(s)`
-                : '✅ Done';
-        }
+        if (status) status.innerHTML = data.data?.length ? `✅ Generated ${data.data.length} sprite(s)` : '✅ Done';
     }
 
-    async function generateGrok(statusEl) {
+    async function generateGrok(status) {
         const token = getGrokAccessToken();
-        if (!token) {
-            throw new Error('No Grok access token found. Please log in with SuperGrok first.');
-        }
+        if (!token) throw new Error('No Grok access token found. Please log in with SuperGrok first.');
 
+        const prompt = `Full body clean sprite of ${document.getElementById('sgCharName')?.value || 'character'}. ${document.getElementById('sgCharDesc')?.value || ''}`;
+
+        const res = await fetch('/api/xai/images/generations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ prompt, n: selectedGenCount })
+        });
+
+        if (!res.ok) throw new Error('Grok error: ' + await res.text());
+        const data = await res.json();
+        if (status) status.innerHTML = data.data?.length ? `✅ Generated ${data.data.length} sprite(s) with Grok` : '✅ Done with Grok';
+    }
+
+    async function generateComfyUI(status) {
+        const baseUrl = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
+        const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
         const name = document.getElementById('sgCharName')?.value || 'character';
         const desc = document.getElementById('sgCharDesc')?.value || '';
 
-        const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style. Race: ${selectedRaceMode}.`;
+        const workflow = {
+            "3": { "class_type": "KSampler", "inputs": { "seed": Math.floor(Math.random()*1e9), "steps": 20, "cfg": 7, "sampler_name": "euler_ancestral", "scheduler": "normal", "denoise": 1, "model": ["4",0], "positive": ["6",0], "negative": ["7",0], "latent_image": ["5",0] } },
+            "4": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
+            "5": { "class_type": "EmptyLatentImage", "inputs": { "width": 1024, "height": 1024, "batch_size": selectedGenCount } },
+            "6": { "class_type": "CLIPTextEncode", "inputs": { "text": `${name}, ${desc}, full body sprite`, "clip": ["4",1] } },
+            "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "bad quality", "clip": ["4",1] } },
+            "8": { "class_type": "VAEDecode", "inputs": { "samples": ["3",0], "vae": ["4",2] } },
+            "9": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["8",0] } }
+        };
 
-        // xAI currently does not support 
+        const q = await fetch('/api/comfyui/proxy', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ baseUrl, path: '/prompt', method: 'POST', body: { prompt: workflow } })
+        });
+        if (!q.ok) throw new Error('Queue failed: ' + await q.text());
+
+        const qd = await q.json();
+        const pid = qd.prompt_id;
+        if (!pid) { if (status) status.innerHTML = '✅ Queued'; return; }
+
+        if (status) status.innerHTML = '⏳ Generating...';
+
+        for (let i = 0; i < 20; i++) {
+            await new Promise(r => setTimeout(r, 1500));
+            try {
+                const h = await fetch('/api/comfyui/proxy', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseUrl, path: `/history/${pid}`, method: 'GET' })
+                });
+                const hist = await h.json();
+                const out = hist[pid]?.outputs?.["9"];
+                if (out?.images?.[0]) {
+                    const fname = out.images[0].filename;
+                    if (status) status.innerHTML = `✅ Saved as: ${fname} (check ComfyUI output folder)`;
+                    return;
+                }
+            } catch {}
+        }
+        if (status) status.innerHTML = '⏳ Still processing (check ComfyUI queue)';
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initSpritePrep);
+    } else {
+        initSpritePrep();
+    }
+
+})();
