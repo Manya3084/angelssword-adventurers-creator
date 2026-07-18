@@ -123,7 +123,7 @@
             }
         }
 
-        // Simultaneous Generations Count
+        // Simultaneous Generations
         const genCountContainer = document.getElementById('sgGenCount');
         if (genCountContainer) {
             genCountContainer.addEventListener('click', (e) => {
@@ -136,10 +136,10 @@
                 selectedGenCount = parseInt(btn.dataset.count) || 1;
             });
 
-            const defaultCountBtn = genCountContainer.querySelector('.gen-count-btn.active') || genCountContainer.querySelector('.gen-count-btn');
-            if (defaultCountBtn) {
-                defaultCountBtn.classList.add('active');
-                selectedGenCount = parseInt(defaultCountBtn.dataset.count) || 1;
+            const defaultBtn = genCountContainer.querySelector('.gen-count-btn.active') || genCountContainer.querySelector('.gen-count-btn');
+            if (defaultBtn) {
+                defaultBtn.classList.add('active');
+                selectedGenCount = parseInt(defaultBtn.dataset.count) || 1;
             }
         }
 
@@ -231,8 +231,6 @@
         const statusEl = document.getElementById('sgStatus');
         const btn = document.getElementById('sgGenerateBtn');
 
-        console.log('[Generate] Button clicked. Provider:', aiProvider);
-
         if (btn) btn.disabled = true;
         if (statusEl) {
             statusEl.innerHTML = '<span class="spinner"></span> Generating...';
@@ -248,9 +246,9 @@
                 await generateOpenAI(statusEl);
             }
         } catch (e) {
-            console.error('[Generate] Error:', e);
+            console.error(e);
             if (statusEl) {
-                statusEl.innerHTML = '❌ Error: ' + (e.message || e);
+                statusEl.innerHTML = '❌ ' + (e.message || e);
                 statusEl.style.color = 'var(--red, red)';
             }
         } finally {
@@ -264,8 +262,6 @@
 
         const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style. Race: ${selectedRaceMode}.`;
 
-        console.log('[Generate] Calling OpenAI with prompt:', prompt);
-
         const res = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -278,28 +274,123 @@
         });
 
         if (!res.ok) {
-            const errText = await res.text();
-            throw new Error(`OpenAI request failed: ${res.status} - ${errText}`);
+            const text = await res.text();
+            throw new Error(`OpenAI failed: ${res.status} ${text}`);
         }
 
         const data = await res.json();
-
-        if (data.data && data.data.length > 0) {
-            if (statusEl) statusEl.innerHTML = `✅ Generated ${data.data.length} sprite(s) with OpenAI`;
-            console.log('[Generate] Success:', data);
-        } else {
-            throw new Error(data.error || 'No images returned from OpenAI');
+        if (statusEl) {
+            statusEl.innerHTML = (data.data && data.data.length > 0)
+                ? `✅ Generated ${data.data.length} sprite(s)`
+                : '✅ Done';
         }
     }
 
     async function generateGrok(statusEl) {
-        if (statusEl) statusEl.innerHTML = '✨ Grok generation requires full OAuth implementation (coming soon)';
-        console.log('[Generate] Grok path selected (stub)');
+        const name = document.getElementById('sgCharName')?.value || 'character';
+        const desc = document.getElementById('sgCharDesc')?.value || '';
+
+        const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style. Race: ${selectedRaceMode}.`;
+
+        const res = await fetch('/api/xai/images/generations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: prompt,
+                n: selectedGenCount,
+                size: '1024x1024'
+            })
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Grok failed: ${res.status} ${text}`);
+        }
+
+        const data = await res.json();
+        if (statusEl) {
+            statusEl.innerHTML = (data.data && data.data.length > 0)
+                ? `✅ Generated ${data.data.length} sprite(s) with Grok` 
+                : '✅ Done with Grok';
+        }
     }
 
     async function generateComfyUI(statusEl) {
-        if (statusEl) statusEl.innerHTML = '🖥️ ComfyUI generation requires workflow configuration';
-        console.log('[Generate] ComfyUI path selected (stub)');
+        const baseUrl = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
+        const checkpoint = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
+        const ipadapter = localStorage.getItem('comfyui_ipadapter_model') || '';
+        const clipvision = localStorage.getItem('comfyui_clip_vision_model') || '';
+        const ipWeight = parseFloat(localStorage.getItem('comfyui_ipadapter_weight')) || 0.55;
+
+        const name = document.getElementById('sgCharName')?.value || 'character';
+        const desc = document.getElementById('sgCharDesc')?.value || '';
+
+        // Very basic workflow trigger (user can expand this later)
+        const workflow = {
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "seed": Math.floor(Math.random() * 1000000000),
+                    "steps": 20,
+                    "cfg": 7,
+                    "sampler_name": "euler_ancestral",
+                    "scheduler": "normal",
+                    "denoise": 1,
+                    "model": ["4", 0],
+                    "positive": ["6", 0],
+                    "negative": ["7", 0],
+                    "latent_image": ["5", 0]
+                }
+            },
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": { "ckpt_name": checkpoint }
+            },
+            "5": {
+                "class_type": "EmptyLatentImage",
+                "inputs": { "width": 1024, "height": 1024, "batch_size": selectedGenCount }
+            },
+            "6": {
+                "class_type": "CLIPTextEncode",
+                "inputs": { "text": `${name}, ${desc}, full body sprite, clean background`, "clip": ["4", 1] }
+            },
+            "7": {
+                "class_type": "CLIPTextEncode",
+                "inputs": { "text": "blurry, lowres, bad anatomy", "clip": ["4", 1] }
+            },
+            "8": {
+                "class_type": "VAEDecode",
+                "inputs": { "samples": ["3", 0], "vae": ["4", 2] }
+            },
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": { "filename_prefix": "as_adventurer", "images": ["8", 0] }
+            }
+        };
+
+        // If IP-Adapter is configured, we can extend the workflow later
+        const res = await fetch('/api/comfyui/proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                baseUrl: baseUrl,
+                path: '/prompt',
+                method: 'POST',
+                body: { prompt: workflow }
+            })
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`ComfyUI failed: ${res.status} ${text}`);
+        }
+
+        const data = await res.json();
+        if (statusEl) {
+            statusEl.innerHTML = data.prompt_id 
+                ? `✅ Queued in ComfyUI (ID: ${data.prompt_id.substring(0,8)}...)` 
+                : '✅ Sent to ComfyUI';
+        }
     }
 
     if (document.readyState === 'loading') {
