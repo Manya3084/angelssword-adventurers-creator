@@ -234,7 +234,6 @@
                 <div>
                     <div class="glass-panel">
                         <div class="panel-title"><span class="title-icon">🖼️</span> Reference Image</div>
-                        <div class="panel-subtitle">Use the sprite from Step 1, or upload your own reference image(s).</div>
                         <div id="vgRefImagePreview" class="canvas-container mb-2 hidden"><img id="vgRefImage" style="width:100%;display:block"></div>
                         <div class="upload-zone" id="vgUploadZone" title="Upload reference image(s)">
                             <div class="upload-icon">🖼️</div>
@@ -407,7 +406,7 @@
                                     <div class="crossfade-controls mt-1">
                                         <label class="toggle-switch"><input type="checkbox" id="vpCrossfade"><span class="slider"></span></label>
                                         <label for="vpCrossfade" style="margin-bottom:0;flex:1">Crossfade</label>
-                                        <div class="range-row" style="flex:2"><input type="range" id="vpCrossfadeDuration" min="100" max="1000" value="300" step="50"><span class="range-value" id="vpCrossfadeDurationVal">300ms</span></div>
+                                        <div class="range-row" style="flex:2"><input type="range" id="vpCrossfadeDuration" min="100" max="1000" value="300"><span class="range-value" id="vpCrossfadeDurationVal">300ms</span></div>
                                     </div>
                                 </div>
                             </div>
@@ -510,21 +509,16 @@
                     <section class="stage disabled" id="exStage3">
                         <div class="stage-header"><span class="stage-number">3</span><span class="stage-title">Export</span></div>
                         <div class="glass-panel">
-                            <div class="config-grid">
-                                <div class="form-row"><label for="exStartFrame">Start Frame</label><input type="number" id="exStartFrame" value="0" min="0"></div>
-                                <div class="form-row"><label for="exEndFrame">End Frame</label><input type="number" id="exEndFrame" value="0" min="0"></div>
-                                <div class="form-row"><label for="exFrameSkip">Frame Skip</label><input type="number" id="exFrameSkip" value="0" min="0" max="10"></div>
-                                <div class="form-row"><label for="exFPS">FPS Override</label><input type="number" id="exFPS" value="0" min="0" max="60"></div>
-                            </div>
-                            <div class="config-grid mt-1">
-                                <div class="form-row"><label for="exWidth">Output Width</label><input type="number" id="exWidth" value="0" min="0"></div>
-                                <div class="form-row"><label for="exHeight">Output Height</label><div class="flex items-center gap-sm"><input type="number" id="exHeight" value="0" min="0" style="flex:1"><label class="toggle-switch"><input type="checkbox" id="exAspectLock" checked><span class="slider"></span></label><span class="text-dim" style="font-size:0.7rem">🔒</span></div></div>
-                                <div class="form-row"><label for="exFrameSkip">Frame Skip</label><input type="number" id="exFrameSkip" value="0" min="0" max="10"></div>
-                                <div class="form-row"><label for="exFPS">FPS Override</label><input type="number" id="exFPS" value="0" min="0" max="60"></div>
-                            </div>
+                            <div class="form-row"><label for="exStartFrame">Start Frame</label><input type="number" id="exStartFrame" value="0" min="0"></div>
+                            <div class="form-row"><label for="exEndFrame">End Frame</label><input type="number" id="exEndFrame" value="0" min="0"></div>
+                            <div class="form-row"><label for="exFrameSkip">Frame Skip</label><input type="number" id="exFrameSkip" value="0" min="0" max="10"></div>
+                            <div class="form-row"><label for="exFPS">FPS Override</label><input type="number" id="exFPS" value="0" min="0" max="60"></div>
                             <div class="form-row"><label for="exWidth">Output Width</label><input type="number" id="exWidth" value="0" min="0"></div>
-                                <div class="form-row"><label for="exHeight">Output Height</label><div class="flex items-center gap-sm"><input type="number" id="exHeight" value="0" min="0" style="flex:1"><label class="toggle-switch"><input type="checkbox" id="exAspectLock" checked><span class="slider"></span></label><span class="text-dim" style="font-size:0.7rem">🔒</span></div></div>
-                            </div>
+                            <div class="form-row"><label for="exHeight">Output Height</label><div class="flex items-center gap-sm"><input type="number" id="exHeight" value="0" min="0" style="flex:1"><label class="toggle-switch"><input type="checkbox" id="exAspectLock" checked><span class="slider"></span></label><span class="text-dim" style="font-size:0.7rem">🔒</span></div></div>
+                            <div class="form-row"><label for="exFrameSkip">Frame Skip</label><input type="number" id="exFrameSkip" value="0" min="0" max="10"></div>
+                            <div class="form-row"><label for="exFPS">FPS Override</label><input type="number" id="exFPS" value="0" min="0" max="60"></div>
+                            <div class="form-row"><label for="exWidth">Output Width</label><input type="number" id="exWidth" value="0" min="0"></div>
+                            <div class="form-row"><label for="exHeight">Output Height</label><div class="flex items-center gap-sm"><input type="number" id="exHeight" value="0" min="0" style="flex:1"><label class="toggle-switch"><input type="checkbox" id="exAspectLock" checked><span class="slider"></span></label><span class="text-dim" style="font-size:0.7rem">🔒</span></div></div>
                             <hr class="gold-divider">
                             <div class="form-row">
                                 <label>Quick Filename</label>
@@ -626,6 +620,21 @@
                     <div id="settingsGrokStatus"></div>
                 </div>
 
+                <!-- NEW: xAI API Key for Grok Imagine -->
+                <div class="glass-panel">
+                    <div class="panel-title"><span class="title-icon">🔑</span> xAI API Key (for Grok Imagine)</div>
+                    <div class="panel-subtitle">Use a key from https://console.x.ai for more reliable Grok image generation. Stored locally only. Falls back to SuperGrok OAuth if empty.</div>
+                    <div class="api-key-row">
+                        <div class="input-password">
+                            <input type="password" id="settingsXAIKey" placeholder="xai-...">
+                            <button class="toggle-vis" id="settingsXAIToggle">👁️</button>
+                        </div>
+                        <button class="btn btn-sm btn-secondary" id="settingsXAISave">Save</button>
+                        <button class="btn btn-sm btn-accent" id="settingsXAITest">Test</button>
+                    </div>
+                    <div id="settingsXAIStatus"></div>
+                </div>
+
                 <div class="glass-panel">
                     <div class="panel-title"><span class="title-icon">🔊</span> Notifications</div>
                     <div class="flex items-center gap-sm">
@@ -671,6 +680,73 @@
 <script src="video-gen.js"></script>
 <script src="video-prep.js"></script>
 <script src="model-exporter.js"></script>
+
+<script>
+// xAI API Key handling in Settings
+(function() {
+    const input = document.getElementById('settingsXAIKey');
+    const saveBtn = document.getElementById('settingsXAISave');
+    const testBtn = document.getElementById('settingsXAITest');
+    const statusEl = document.getElementById('settingsXAIStatus');
+    const toggleBtn = document.getElementById('settingsXAIToggle');
+
+    if (!input || !saveBtn) return;
+
+    // Load existing key
+    const existing = localStorage.getItem('xai_api_key');
+    if (existing) {
+        input.value = existing;
+    }
+
+    saveBtn.addEventListener('click', () => {
+        const val = input.value.trim();
+        if (val) {
+            localStorage.setItem('xai_api_key', val);
+            if (statusEl) {
+                statusEl.innerHTML = '<span class="status-msg success">✅ Saved</span>';
+                setTimeout(() => { if (statusEl) statusEl.innerHTML = ''; }, 2000);
+            }
+        } else {
+            localStorage.removeItem('xai_api_key');
+            if (statusEl) statusEl.innerHTML = '<span class="status-msg info">Cleared</span>';
+        }
+    });
+
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', () => {
+            input.type = input.type === 'password' ? 'text' : 'password';
+            toggleBtn.textContent = input.type === 'password' ? '👁️' : '🙈';
+        });
+    }
+
+    if (testBtn) {
+        testBtn.addEventListener('click', async () => {
+            const key = input.value.trim() || localStorage.getItem('xai_api_key');
+            if (!key) {
+                if (statusEl) statusEl.innerHTML = '<span class="status-msg error">No key to test</span>';
+                return;
+            }
+            if (statusEl) statusEl.innerHTML = '<span class="status-msg info"><span class="spinner"></span> Testing...</span>';
+
+            try {
+                const res = await fetch('/api/xai/images/generations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+                    body: JSON.stringify({ model: 'grok-imagine-image-quality', prompt: 'test', n: 1 })
+                });
+                if (res.ok) {
+                    if (statusEl) statusEl.innerHTML = '<span class="status-msg success">✅ Key works</span>';
+                } else {
+                    const err = await res.text();
+                    if (statusEl) statusEl.innerHTML = `<span class="status-msg error">❌ ${err.substring(0,120)}</span>`;
+                }
+            } catch (e) {
+                if (statusEl) statusEl.innerHTML = '<span class="status-msg error">❌ Connection error</span>';
+            }
+        });
+    }
+})();
+</script>
 
 </body>
 </html>
