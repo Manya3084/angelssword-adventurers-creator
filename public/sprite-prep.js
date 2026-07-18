@@ -1,4 +1,4 @@
- (function() {
+(function() {
     'use strict';
 
     let spriteImage = null;
@@ -98,7 +98,7 @@
             if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
         }
 
-        // === Character Reference Upload ===
+        // Character Reference Upload
         const charIn = document.getElementById('sgCharRefInput');
         const charPrev = document.getElementById('sgCharRefPreview');
         if (charIn) {
@@ -117,7 +117,7 @@
             });
         }
 
-        // === Style Reference Upload ===
+        // Style Reference Upload
         const styleIn = document.getElementById('sgStyleRefInput');
         const stylePrev = document.getElementById('sgStyleRefPreview');
         if (styleIn) {
@@ -171,6 +171,7 @@
         else btn.innerHTML = '✨ Generate Sprite (OpenAI)';
     }
 
+    // Normal prompt used by OpenAI / Grok
     function buildPrompt() {
         const name = document.getElementById('sgCharName')?.value || 'character';
         const desc = document.getElementById('sgCharDesc')?.value || '';
@@ -178,14 +179,28 @@
 
         let p = `Full body clean sprite of ${name}. ${desc}. ${action}. White background, game asset style, clean lines. Race: ${selectedRaceMode}.`;
 
-        if (charRefBase64) {
-            p += ` Use the uploaded character reference image for accurate appearance and clothing.`;
-        }
-        if (styleRefBase64) {
-            p += ` Match the art style from the uploaded style reference.`;
-        }
+        if (charRefBase64) p += ` Use the uploaded character reference for face, clothing and pose accuracy.`;
+        if (styleRefBase64) p += ` Match the visual style of the uploaded style reference.`;
 
         return p;
+    }
+
+    // Special prompt for Pony Diffusion V6 XL (prevents black images)
+    function buildComfyPrompt() {
+        const name = document.getElementById('sgCharName')?.value || 'character';
+        const desc = document.getElementById('sgCharDesc')?.value || '';
+        const action = document.getElementById('sgCharAction')?.value || '';
+
+        // Classic Pony tags that actually work
+        let positive = `score_9, score_8_up, score_7_up, source_anime, rating_safe, ` +
+                       `full body, standing, clean sprite, white background, simple background, ` +
+                       `game asset, character design, ${name}, ${desc}, ${action}, ` +
+                       `sharp focus, highly detailed, anime style`;
+
+        if (selectedRaceMode === 'kanolith') positive += ', animal features, furry';
+        if (selectedRaceMode === 'zoalith') positive += ', dragon features, scales';
+
+        return positive;
     }
 
     function handoffToManual() {
@@ -324,7 +339,6 @@
 
         let res;
         if (hasRef) {
-            // Use edits endpoint when character reference is provided
             res = await fetch('/api/edits', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -403,32 +417,72 @@
         const base = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
 
+        // Improved positive prompt for Pony
+        const positiveText = buildComfyPrompt();
+
+        // Strong negative prompt that prevents black / empty results
+        const negativeText = 'score_6, score_5, score_4, blurry, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, artist name, black background, solid black, empty, pure black';
+
         const wf = {
-            "3": { "class_type": "KSampler", "inputs": { "seed": Math.floor(Math.random() * 1e9), "steps": 20, "cfg": 7, "sampler_name": "euler_ancestral", "scheduler": "normal", "denoise": 1, "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0] } },
-            "4": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
-            "5": { "class_type": "EmptyLatentImage", "inputs": { "width": 1024, "height": 1024, "batch_size": selectedGenCount } },
-            "6": { "class_type": "CLIPTextEncode", "inputs": { "text": buildPrompt(), "clip": ["4", 1] } },
-            "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "bad quality", "clip": ["4", 1] } },
-            "8": { "class_type": "VAEDecode", "inputs": { "samples": ["3", 0], "vae": ["4", 2] } },
-            "9": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["8", 0] } }
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "seed": Math.floor(Math.random() * 1e9),
+                    "steps": 25,
+                    "cfg": 6.5,
+                    "sampler_name": "euler_ancestral",
+                    "scheduler": "normal",
+                    "denoise": 1,
+                    "model": ["4", 0],
+                    "positive": ["6", 0],
+                    "negative": ["7", 0],
+                    "latent_image": ["5", 0]
+                }
+            },
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": { "ckpt_name": ckpt }
+            },
+            "5": {
+                "class_type": "EmptyLatentImage",
+                "inputs": { "width": 1024, "height": 1024, "batch_size": selectedGenCount }
+            },
+            "6": {
+                "class_type": "CLIPTextEncode",
+                "inputs": { "text": positiveText, "clip": ["4", 1] }
+            },
+            "7": {
+                "class_type": "CLIPTextEncode",
+                "inputs": { "text": negativeText, "clip": ["4", 1] }
+            },
+            "8": {
+                "class_type": "VAEDecode",
+                "inputs": { "samples": ["3", 0], "vae": ["4", 2] }
+            },
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": { "filename_prefix": "as_adventurer", "images": ["8", 0] }
+            }
         };
 
         const q = await fetch('/api/comfyui/proxy', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ baseUrl: base, path: '/prompt', method: 'POST', body: { prompt: wf } })
         });
         if (!q.ok) throw new Error('ComfyUI queue failed');
         const qd = await q.json();
         const pid = qd.prompt_id;
-        if (status) status.innerHTML = '⏳ Generating...';
+        if (status) status.innerHTML = '⏳ Generating with Pony...';
 
         if (!pid) return;
 
-        for (let i = 0; i < 20; i++) {
-            await new Promise(r => setTimeout(r, 1800));
+        for (let i = 0; i < 25; i++) {
+            await new Promise(r => setTimeout(r, 2000));
             try {
                 const h = await fetch('/api/comfyui/proxy', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ baseUrl: base, path: `/history/${pid}`, method: 'GET' })
                 });
                 const hist = await h.json();
@@ -462,7 +516,7 @@
                             const card = createResultCard(dataUrl, 0, rd);
                             if (grid) grid.appendChild(card);
 
-                            if (status) status.innerHTML = `✅ Generated (ComfyUI)`;
+                            if (status) status.innerHTML = `✅ Generated (ComfyUI / Pony)`;
 
                             if (grid && grid.children.length === 1) {
                                 selectResult(card, rd);
@@ -478,19 +532,6 @@
             } catch (e) {}
         }
         if (status) status.innerHTML = '⏳ Still processing...';
-    }
-
-    function buildPrompt() {
-        const name = document.getElementById('sgCharName')?.value || 'character';
-        const desc = document.getElementById('sgCharDesc')?.value || '';
-        const action = document.getElementById('sgCharAction')?.value || '';
-
-        let p = `Full body clean sprite of ${name}. ${desc}. ${action}. White background, game asset style, clean lines. Race: ${selectedRaceMode}.`;
-
-        if (charRefBase64) p += ` Use the uploaded character reference for face, clothing and pose accuracy.`;
-        if (styleRefBase64) p += ` Match the visual style of the uploaded style reference.`;
-
-        return p;
     }
 
     if (document.readyState === 'loading') {
