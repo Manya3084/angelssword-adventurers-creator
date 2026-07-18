@@ -56,6 +56,7 @@
     }
 
     function initAIGenerateMode() {
+        // Race Mode
         const raceMode = document.getElementById('sgRaceMode');
         if (raceMode) {
             raceMode.addEventListener('click', (e) => {
@@ -69,6 +70,7 @@
             if (def) { def.classList.add('active'); selectedRaceMode = def.dataset.mode || 'normal'; }
         }
 
+        // Key Color
         const colors = document.getElementById('sgColorSwatches');
         if (colors) {
             colors.addEventListener('click', (e) => {
@@ -82,6 +84,7 @@
             if (init) { init.classList.add('selected'); selectedKeyColor = init.dataset.color || '#00FF00'; }
         }
 
+        // Generation Count
         const countBox = document.getElementById('sgGenCount');
         if (countBox) {
             countBox.addEventListener('click', (e) => {
@@ -95,28 +98,45 @@
             if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
         }
 
+        // === Character Reference Upload ===
         const charIn = document.getElementById('sgCharRefInput');
         const charPrev = document.getElementById('sgCharRefPreview');
         if (charIn) {
             charIn.addEventListener('change', e => {
-                const f = e.target.files[0]; if (!f) return;
+                const f = e.target.files[0];
+                if (!f) return;
                 const r = new FileReader();
-                r.onload = ev => { charRefBase64 = ev.target.result; if (charPrev) { charPrev.innerHTML = `<img src="${charRefBase64}" style="max-height:120px;border-radius:8px">`; charPrev.classList.remove('hidden'); } };
+                r.onload = ev => {
+                    charRefBase64 = ev.target.result;
+                    if (charPrev) {
+                        charPrev.innerHTML = `<img src="${charRefBase64}" style="max-height:120px; border-radius:8px; border:1px solid var(--border);">`;
+                        charPrev.classList.remove('hidden');
+                    }
+                };
                 r.readAsDataURL(f);
             });
         }
 
+        // === Style Reference Upload ===
         const styleIn = document.getElementById('sgStyleRefInput');
         const stylePrev = document.getElementById('sgStyleRefPreview');
         if (styleIn) {
             styleIn.addEventListener('change', e => {
-                const f = e.target.files[0]; if (!f) return;
+                const f = e.target.files[0];
+                if (!f) return;
                 const r = new FileReader();
-                r.onload = ev => { styleRefBase64 = ev.target.result; if (stylePrev) { stylePrev.innerHTML = `<img src="${styleRefBase64}" style="max-height:120px;border-radius:8px">`; stylePrev.classList.remove('hidden'); } };
+                r.onload = ev => {
+                    styleRefBase64 = ev.target.result;
+                    if (stylePrev) {
+                        stylePrev.innerHTML = `<img src="${styleRefBase64}" style="max-height:120px; border-radius:8px; border:1px solid var(--border);">`;
+                        stylePrev.classList.remove('hidden');
+                    }
+                };
                 r.readAsDataURL(f);
             });
         }
 
+        // Provider
         const prov = document.getElementById('sgProvider');
         if (prov) {
             prov.addEventListener('click', e => {
@@ -149,6 +169,23 @@
         if (aiProvider === 'comfyui') btn.innerHTML = '🖥️ Generate Sprite (ComfyUI)';
         else if (aiProvider === 'grok') btn.innerHTML = '✨ Generate Sprite (Grok Imagine)';
         else btn.innerHTML = '✨ Generate Sprite (OpenAI)';
+    }
+
+    function buildPrompt() {
+        const name = document.getElementById('sgCharName')?.value || 'character';
+        const desc = document.getElementById('sgCharDesc')?.value || '';
+        const action = document.getElementById('sgCharAction')?.value || '';
+
+        let p = `Full body clean sprite of ${name}. ${desc}. ${action}. White background, game asset style, clean lines. Race: ${selectedRaceMode}.`;
+
+        if (charRefBase64) {
+            p += ` Use the uploaded character reference image for accurate appearance and clothing.`;
+        }
+        if (styleRefBase64) {
+            p += ` Match the art style from the uploaded style reference.`;
+        }
+
+        return p;
     }
 
     function handoffToManual() {
@@ -282,43 +319,84 @@
     }
 
     async function generateOpenAI(status, grid) {
-        const res = await fetch('/api/generate', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'gpt-image-2', prompt: buildPrompt(), n: selectedGenCount, size: '1024x1024' })
-        });
+        const prompt = buildPrompt();
+        const hasRef = !!charRefBase64;
+
+        let res;
+        if (hasRef) {
+            // Use edits endpoint when character reference is provided
+            res = await fetch('/api/edits', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'gpt-image-2',
+                    prompt: prompt,
+                    n: selectedGenCount,
+                    size: '1024x1024',
+                    images: [charRefBase64]
+                })
+            });
+        } else {
+            res = await fetch('/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: 'gpt-image-2', prompt, n: selectedGenCount, size: '1024x1024' })
+            });
+        }
+
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
+
         data.data?.forEach((d, i) => {
             const src = d.b64_json ? `data:image/png;base64,${d.b64_json}` : d.url;
-            if (src) { const rd = { imageSrc: src, index: i }; generatedResults.push(rd); grid.appendChild(createResultCard(src, i, rd)); }
+            if (src) {
+                const rd = { imageSrc: src, index: i };
+                generatedResults.push(rd);
+                grid.appendChild(createResultCard(src, i, rd));
+            }
         });
-        if (status) status.innerHTML = `✅ Generated ${data.data?.length || 0}`;
+
+        if (status) status.innerHTML = `✅ Generated ${data.data?.length || 0} sprite(s)`;
     }
 
     async function generateGrok(status, grid) {
         const tok = getGrokTokenInfo();
         if (!tok) throw new Error('No SuperGrok token or xAI API key found.');
+
         const prompt = buildPrompt();
-        for (const model of ['grok-imagine-image-quality', 'grok-imagine-image']) {
+        const models = ['grok-imagine-image-quality', 'grok-imagine-image'];
+
+        for (const model of models) {
             try {
                 const res = await fetch('/api/xai/images/generations', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tok.value}` },
                     body: JSON.stringify({ model, prompt, n: selectedGenCount })
                 });
-                if (!res.ok) { if ((await res.text()).includes('Incorrect API key')) continue; throw new Error(await res.text()); }
+                if (!res.ok) {
+                    const txt = await res.text();
+                    if (txt.includes('Incorrect API key')) continue;
+                    throw new Error(txt);
+                }
                 const data = await res.json();
+
                 if (data.data?.length) {
                     data.data.forEach((d, i) => {
                         const src = d.b64_json ? `data:image/png;base64,${d.b64_json}` : d.url;
-                        if (src) { const rd = { imageSrc: src, index: i }; generatedResults.push(rd); grid.appendChild(createResultCard(src, i, rd)); }
+                        if (src) {
+                            const rd = { imageSrc: src, index: i };
+                            generatedResults.push(rd);
+                            grid.appendChild(createResultCard(src, i, rd));
+                        }
                     });
                     if (status) status.innerHTML = `✅ Generated with ${model}`;
                     return;
                 }
-            } catch (e) { console.error(e); }
+            } catch (e) {
+                console.error(e);
+            }
         }
-        throw new Error('Grok failed. Use xAI API key from console.x.ai');
+        throw new Error('Grok generation failed. Use an xAI API key from console.x.ai.');
     }
 
     async function generateComfyUI(status, grid) {
@@ -367,7 +445,7 @@
                                 baseUrl: base,
                                 path: `/view?filename=${encodeURIComponent(fname)}&type=output`,
                                 method: 'GET',
-                                isBinary: true   // ← Important: tell proxy to return raw binary
+                                isBinary: true
                             })
                         });
 
@@ -390,20 +468,14 @@
                                 selectResult(card, rd);
                             }
                             return;
-                        } else {
-                            console.warn('[ComfyUI] View endpoint returned non-OK');
-                            if (status) status.innerHTML = `✅ Saved: ${fname} (check ComfyUI output folder)`;
-                            return;
                         }
                     } catch (e) {
-                        console.error('[ComfyUI] Failed to fetch image blob:', e);
+                        console.error('[ComfyUI] Image fetch failed:', e);
                         if (status) status.innerHTML = `✅ Saved: ${fname} (check ComfyUI output)`;
                         return;
                     }
                 }
-            } catch (e) {
-                // keep polling
-            }
+            } catch (e) {}
         }
         if (status) status.innerHTML = '⏳ Still processing...';
     }
@@ -411,7 +483,14 @@
     function buildPrompt() {
         const name = document.getElementById('sgCharName')?.value || 'character';
         const desc = document.getElementById('sgCharDesc')?.value || '';
-        return `Full body clean sprite of ${name}. ${desc}. White background, game asset style. Race: ${selectedRaceMode}.`;
+        const action = document.getElementById('sgCharAction')?.value || '';
+
+        let p = `Full body clean sprite of ${name}. ${desc}. ${action}. White background, game asset style, clean lines. Race: ${selectedRaceMode}.`;
+
+        if (charRefBase64) p += ` Use the uploaded character reference for face, clothing and pose accuracy.`;
+        if (styleRefBase64) p += ` Match the visual style of the uploaded style reference.`;
+
+        return p;
     }
 
     if (document.readyState === 'loading') {
