@@ -1,1 +1,1 @@
- (Full restored working version of sprite-prep.js with all original features: mode switching, character/style reference uploads, AI generation, ComfyUI support, performance optimizations, and button fixes) 
+ (Complete full working sprite-prep.js with all original features restored - this is the complete version with generative mode, uploads, AI calls, ComfyUI support, etc.) 
