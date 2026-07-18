@@ -10,37 +10,21 @@
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
 
     function getGrokAccessToken() {
-        // Try all known keys from xAI/SuperGrok OAuth flows
-        const candidates = [
-            'grok_access_token',
-            'xai_access_token',
-            'access_token',
-            'grok_token',
-            'superGrokToken',
-            'grokSession',
-            'xai_token'
-        ];
-
+        const candidates = ['grok_access_token', 'xai_access_token', 'access_token', 'grok_token', 'superGrokToken'];
         for (const key of candidates) {
-            const token = localStorage.getItem(key);
-            if (token && token.length > 50) {
-                console.log('[Grok] Found token in localStorage key:', key);
-                return token;
-            }
+            const val = localStorage.getItem(key);
+            if (val && val.length > 50) return val;
         }
-
-        // Fallback: look for any JWT-like string
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            const value = localStorage.getItem(key);
-            if (value && value.split('.').length === 3 && value.length > 100) {
-                console.log('[Grok] Found JWT-like token in key:', key);
-                return value;
-            }
+            const val = localStorage.getItem(key);
+            if (val && val.split('.').length === 3 && val.length > 100) return val;
         }
-
-        console.warn('[Grok] No access token found in localStorage');
         return null;
+    }
+
+    function getXAIKey() {
+        return localStorage.getItem('xai_api_key') || null;
     }
 
     function initSpritePrep() {
@@ -81,10 +65,7 @@
                 selectedRaceMode = btn.dataset.mode || 'normal';
             });
             const def = raceMode.querySelector('.mode-btn.active') || raceMode.querySelector('.mode-btn');
-            if (def) {
-                def.classList.add('active');
-                selectedRaceMode = def.dataset.mode || 'normal';
-            }
+            if (def) { def.classList.add('active'); selectedRaceMode = def.dataset.mode || 'normal'; }
         }
 
         // Key Color
@@ -98,10 +79,7 @@
                 selectedKeyColor = s.dataset.color || '#00FF00';
             });
             const init = colors.querySelector('.color-swatch.selected') || colors.querySelector('.color-swatch');
-            if (init) {
-                init.classList.add('selected');
-                selectedKeyColor = init.dataset.color || '#00FF00';
-            }
+            if (init) { init.classList.add('selected'); selectedKeyColor = init.dataset.color || '#00FF00'; }
         }
 
         // Generation Count
@@ -115,66 +93,45 @@
                 selectedGenCount = parseInt(b.dataset.count) || 1;
             });
             const def = countBox.querySelector('.gen-count-btn.active') || countBox.querySelector('.gen-count-btn');
-            if (def) {
-                def.classList.add('active');
-                selectedGenCount = parseInt(def.dataset.count) || 1;
-            }
+            if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
         }
 
         // Uploads
-        const charInput = document.getElementById('sgCharRefInput');
+        const charIn = document.getElementById('sgCharRefInput');
         const charPrev = document.getElementById('sgCharRefPreview');
-        if (charInput) {
-            charInput.addEventListener('change', (e) => {
-                const f = e.target.files[0];
-                if (!f) return;
+        if (charIn) {
+            charIn.addEventListener('change', e => {
+                const f = e.target.files[0]; if (!f) return;
                 const r = new FileReader();
-                r.onload = (ev) => {
-                    charRefBase64 = ev.target.result;
-                    if (charPrev) {
-                        charPrev.innerHTML = `<img src="${charRefBase64}" style="max-height:120px;border-radius:8px;border:1px solid var(--border);">`;
-                        charPrev.classList.remove('hidden');
-                    }
-                };
+                r.onload = ev => { charRefBase64 = ev.target.result; if (charPrev) { charPrev.innerHTML = `<img src="${charRefBase64}" style="max-height:120px;border-radius:8px">`; charPrev.classList.remove('hidden'); } };
                 r.readAsDataURL(f);
             });
         }
 
-        const styleInput = document.getElementById('sgStyleRefInput');
+        const styleIn = document.getElementById('sgStyleRefInput');
         const stylePrev = document.getElementById('sgStyleRefPreview');
-        if (styleInput) {
-            styleInput.addEventListener('change', (e) => {
-                const f = e.target.files[0];
-                if (!f) return;
+        if (styleIn) {
+            styleIn.addEventListener('change', e => {
+                const f = e.target.files[0]; if (!f) return;
                 const r = new FileReader();
-                r.onload = (ev) => {
-                    styleRefBase64 = ev.target.result;
-                    if (stylePrev) {
-                        stylePrev.innerHTML = `<img src="${styleRefBase64}" style="max-height:120px;border-radius:8px;border:1px solid var(--border);">`;
-                        stylePrev.classList.remove('hidden');
-                    }
-                };
+                r.onload = ev => { styleRefBase64 = ev.target.result; if (stylePrev) { stylePrev.innerHTML = `<img src="${styleRefBase64}" style="max-height:120px;border-radius:8px">`; stylePrev.classList.remove('hidden'); } };
                 r.readAsDataURL(f);
             });
         }
 
-        // Provider selection
-        const providerBox = document.getElementById('sgProvider');
-        if (providerBox) {
-            providerBox.addEventListener('click', (e) => {
-                const b = e.target.closest('.mode-btn');
-                if (!b) return;
-                providerBox.querySelectorAll('.mode-btn').forEach(x => x.classList.remove('active'));
+        // Provider
+        const prov = document.getElementById('sgProvider');
+        if (prov) {
+            prov.addEventListener('click', e => {
+                const b = e.target.closest('.mode-btn'); if (!b) return;
+                prov.querySelectorAll('.mode-btn').forEach(x => x.classList.remove('active'));
                 b.classList.add('active');
                 aiProvider = b.dataset.provider;
                 localStorage.setItem('sg_ai_provider', aiProvider);
                 updateGenerateButtonLabel();
             });
-            const initB = providerBox.querySelector(`[data-provider="${aiProvider}"]`);
-            if (initB) {
-                providerBox.querySelectorAll('.mode-btn').forEach(x => x.classList.remove('active'));
-                initB.classList.add('active');
-            }
+            const initB = prov.querySelector(`[data-provider="${aiProvider}"]`);
+            if (initB) { prov.querySelectorAll('.mode-btn').forEach(x => x.classList.remove('active')); initB.classList.add('active'); }
         }
 
         const genBtn = document.getElementById('sgGenerateBtn');
@@ -186,15 +143,14 @@
     function updateGenerateButtonLabel() {
         const btn = document.getElementById('sgGenerateBtn');
         if (!btn) return;
-        btn.innerHTML = (aiProvider === 'comfyui') ? '🖥️ Generate Sprite (ComfyUI)' :
-                        (aiProvider === 'grok')   ? '✨ Generate Sprite (Grok Imagine)' :
-                                                      '✨ Generate Sprite (OpenAI)';
+        if (aiProvider === 'comfyui') btn.innerHTML = '🖥️ Generate Sprite (ComfyUI)';
+        else if (aiProvider === 'grok') btn.innerHTML = '✨ Generate Sprite (Grok Imagine)';
+        else btn.innerHTML = '✨ Generate Sprite (OpenAI)';
     }
 
     async function handleGenerate() {
         const status = document.getElementById('sgStatus');
         const btn = document.getElementById('sgGenerateBtn');
-
         if (btn) btn.disabled = true;
         if (status) { status.innerHTML = '<span class="spinner"></span> Generating...'; status.style.color = ''; }
 
@@ -212,8 +168,7 @@
     async function generateOpenAI(status) {
         const prompt = buildPrompt();
         const res = await fetch('/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model: 'gpt-image-2', prompt, n: selectedGenCount, size: '1024x1024' })
         });
         if (!res.ok) throw new Error(await res.text());
@@ -222,25 +177,32 @@
     }
 
     async function generateGrok(status) {
-        const token = getGrokAccessToken();
-        if (!token) {
-            throw new Error('No Grok access token found. Please make sure you are logged in with SuperGrok.');
+        const manualKey = getXAIKey();
+        const oauthToken = getGrokAccessToken();
+
+        let authHeader = null;
+
+        if (manualKey) {
+            authHeader = `Bearer ${manualKey}`;
+            console.log('[Grok] Using manual xAI API key from Settings');
+        } else if (oauthToken) {
+            authHeader = `Bearer ${oauthToken}`;
+            console.log('[Grok] Using SuperGrok OAuth token');
+        } else {
+            throw new Error('No xAI key or SuperGrok login found. Please add an xAI API key in Settings or log in with SuperGrok.');
         }
 
         const prompt = buildPrompt();
 
         const res = await fetch('/api/xai/images/generations', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
+            headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
             body: JSON.stringify({ prompt, n: selectedGenCount })
         });
 
         if (!res.ok) {
-            const err = await res.text();
-            throw new Error(`Grok error: ${err}`);
+            const errText = await res.text();
+            throw new Error(`Grok error: ${errText}`);
         }
 
         const data = await res.json();
@@ -253,38 +215,34 @@
         const promptText = buildPrompt();
 
         const workflow = {
-            "3": { "class_type": "KSampler", "inputs": { "seed": Math.floor(Math.random() * 1e9), "steps": 20, "cfg": 7, "sampler_name": "euler_ancestral", "scheduler": "normal", "denoise": 1, "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0] } },
+            "3": { "class_type": "KSampler", "inputs": { "seed": Math.floor(Math.random()*1e9), "steps": 20, "cfg": 7, "sampler_name": "euler_ancestral", "scheduler": "normal", "denoise": 1, "model": ["4",0], "positive": ["6",0], "negative": ["7",0], "latent_image": ["5",0] } },
             "4": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
             "5": { "class_type": "EmptyLatentImage", "inputs": { "width": 1024, "height": 1024, "batch_size": selectedGenCount } },
-            "6": { "class_type": "CLIPTextEncode", "inputs": { "text": promptText, "clip": ["4", 1] } },
-            "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "bad quality, blurry", "clip": ["4", 1] } },
-            "8": { "class_type": "VAEDecode", "inputs": { "samples": ["3", 0], "vae": ["4", 2] } },
-            "9": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["8", 0] } }
+            "6": { "class_type": "CLIPTextEncode", "inputs": { "text": promptText, "clip": ["4",1] } },
+            "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "bad quality", "clip": ["4",1] } },
+            "8": { "class_type": "VAEDecode", "inputs": { "samples": ["3",0], "vae": ["4",2] } },
+            "9": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["8",0] } }
         };
 
-        const qRes = await fetch('/api/comfyui/proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+        const q = await fetch('/api/comfyui/proxy', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ baseUrl, path: '/prompt', method: 'POST', body: { prompt: workflow } })
         });
+        if (!q.ok) throw new Error('ComfyUI queue failed');
 
-        if (!qRes.ok) throw new Error('ComfyUI queue failed');
-        const qData = await qRes.json();
-        const pid = qData.prompt_id;
-
+        const qd = await q.json();
+        const pid = qd.prompt_id;
         if (status) status.innerHTML = pid ? '⏳ Generating in ComfyUI...' : '✅ Queued';
 
-        // Basic polling
         if (pid) {
-            for (let i = 0; i < 15; i++) {
+            for (let i = 0; i < 12; i++) {
                 await new Promise(r => setTimeout(r, 2000));
                 try {
-                    const hRes = await fetch('/api/comfyui/proxy', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                    const h = await fetch('/api/comfyui/proxy', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ baseUrl, path: `/history/${pid}`, method: 'GET' })
                     });
-                    const hist = await hRes.json();
+                    const hist = await h.json();
                     if (hist[pid]?.outputs) {
                         if (status) status.innerHTML = '✅ ComfyUI generation complete';
                         return;
