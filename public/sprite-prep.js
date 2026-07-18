@@ -56,7 +56,6 @@
     }
 
     function initAIGenerateMode() {
-        // Race Mode
         const raceMode = document.getElementById('sgRaceMode');
         if (raceMode) {
             raceMode.addEventListener('click', (e) => {
@@ -70,7 +69,6 @@
             if (def) { def.classList.add('active'); selectedRaceMode = def.dataset.mode || 'normal'; }
         }
 
-        // Key Color
         const colors = document.getElementById('sgColorSwatches');
         if (colors) {
             colors.addEventListener('click', (e) => {
@@ -84,7 +82,6 @@
             if (init) { init.classList.add('selected'); selectedKeyColor = init.dataset.color || '#00FF00'; }
         }
 
-        // Generation Count
         const countBox = document.getElementById('sgGenCount');
         if (countBox) {
             countBox.addEventListener('click', (e) => {
@@ -98,7 +95,6 @@
             if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
         }
 
-        // Uploads
         const charIn = document.getElementById('sgCharRefInput');
         const charPrev = document.getElementById('sgCharRefPreview');
         if (charIn) {
@@ -121,7 +117,6 @@
             });
         }
 
-        // Provider
         const prov = document.getElementById('sgProvider');
         if (prov) {
             prov.addEventListener('click', e => {
@@ -139,16 +134,11 @@
         const genBtn = document.getElementById('sgGenerateBtn');
         if (genBtn) genBtn.addEventListener('click', handleGenerate);
 
-        // Handoff buttons
         const toManualBtn = document.getElementById('sgToManualBtn');
-        if (toManualBtn) {
-            toManualBtn.addEventListener('click', handoffToManual);
-        }
+        if (toManualBtn) toManualBtn.addEventListener('click', handoffToManual);
 
         const handoffBtn = document.getElementById('sgHandoffBtn');
-        if (handoffBtn) {
-            handoffBtn.addEventListener('click', handoffToVideoGen);
-        }
+        if (handoffBtn) handoffBtn.addEventListener('click', handoffToVideoGen);
 
         updateGenerateButtonLabel();
     }
@@ -167,7 +157,6 @@
             return;
         }
 
-        // Switch to Manual mode
         const modeSelector = document.getElementById('spritePrepMode');
         const manualMode = document.getElementById('spriteManualMode');
         const generateMode = document.getElementById('spriteGenerateMode');
@@ -179,7 +168,6 @@
         if (manualMode) manualMode.classList.remove('hidden');
         if (generateMode) generateMode.classList.add('hidden');
 
-        // Load into manual canvas
         const canvas = document.getElementById('spCanvas');
         if (canvas) {
             const ctx = canvas.getContext('2d');
@@ -199,7 +187,6 @@
             img.src = currentSelectedResult.imageSrc;
         }
 
-        // Also set as spriteImage for further use
         spriteImage = currentSelectedResult.imageSrc;
     }
 
@@ -209,19 +196,16 @@
             return;
         }
 
-        // Switch to Video Gen tab
         const tabBar = document.getElementById('tabBar');
         if (tabBar) {
             const videoGenTab = tabBar.querySelector('[data-tab="tab-video-gen"]');
             if (videoGenTab) videoGenTab.click();
         }
 
-        // TODO: Pass the image to Video Gen reference area
-        // For now we just switch tabs. Full handoff can be improved later.
         setTimeout(() => {
             const status = document.getElementById('vgStatus');
             if (status) {
-                status.innerHTML = '<span class="status-msg info">📌 Reference image ready from AI Generate. Upload it in Reference Image section above.</span>';
+                status.innerHTML = '<span class="status-msg info">📌 Reference image ready from AI Generate. Upload it in the Reference Image section.</span>';
             }
         }, 500);
     }
@@ -241,7 +225,7 @@
 
         try {
             if (aiProvider === 'comfyui') {
-                await generateComfyUI(status);
+                await generateComfyUI(status, resultsGrid);
             } else if (aiProvider === 'grok') {
                 await generateGrok(status, resultsGrid);
             } else {
@@ -261,7 +245,7 @@
     function createResultCard(imageSrc, index, resultData) {
         const card = document.createElement('div');
         card.className = 'result-card glass-panel';
-        card.style.cssText = 'padding:8px; cursor:pointer; transition:all 0.2s;';
+        card.style.cssText = 'padding:8px; cursor:pointer;';
 
         const img = document.createElement('img');
         img.src = imageSrc;
@@ -273,41 +257,27 @@
         const downloadBtn = document.createElement('button');
         downloadBtn.className = 'btn btn-sm btn-secondary';
         downloadBtn.textContent = '💾 Download';
-        downloadBtn.onclick = (e) => {
-            e.stopImmediatePropagation();
-            const link = document.createElement('a');
-            link.href = imageSrc;
-            link.download = `generated_${index + 1}.png`;
-            link.click();
-        };
+        downloadBtn.onclick = (e) => { e.stopImmediatePropagation(); const a = document.createElement('a'); a.href = imageSrc; a.download = `generated_${index+1}.png`; a.click(); };
 
         const selectBtn = document.createElement('button');
         selectBtn.className = 'btn btn-sm btn-primary';
         selectBtn.textContent = '✓ Select';
-        selectBtn.onclick = (e) => {
-            e.stopImmediatePropagation();
-            selectResult(card, resultData);
-        };
+        selectBtn.onclick = (e) => { e.stopImmediatePropagation(); selectResult(card, resultData); };
 
         btnGroup.appendChild(downloadBtn);
         btnGroup.appendChild(selectBtn);
 
         card.appendChild(img);
         card.appendChild(btnGroup);
-
         img.onclick = () => selectResult(card, resultData);
 
         return card;
     }
 
     function selectResult(cardElement, resultData) {
-        document.querySelectorAll('#sgResultsGrid .result-card').forEach(c => {
-            c.style.border = '1px solid var(--border)';
-            c.style.boxShadow = 'none';
-        });
-
+        document.querySelectorAll('#sgResultsGrid .result-card').forEach(c => { c.style.border = '1px solid var(--border)'; c.style.boxShadow = 'none'; });
         cardElement.style.border = '2px solid var(--accent-gold)';
-        cardElement.style.boxShadow = '0 0 0 3px rgba(219, 184, 88, 0.2)';
+        cardElement.style.boxShadow = '0 0 0 3px rgba(219,184,88,0.2)';
 
         currentSelectedResult = resultData;
 
@@ -318,14 +288,10 @@
             img.onload = () => {
                 ctx.fillStyle = selectedKeyColor;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-
                 const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
-                const drawW = img.width * scale;
-                const drawH = img.height * scale;
-                const x = (canvas.width - drawW) / 2;
-                const y = (canvas.height - drawH) / 2;
-
-                ctx.drawImage(img, x, y, drawW, drawH);
+                const w = img.width * scale;
+                const h = img.height * scale;
+                ctx.drawImage(img, (canvas.width - w)/2, (canvas.height - h)/2, w, h);
             };
             img.src = resultData.imageSrc;
         }
@@ -337,86 +303,57 @@
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model: 'gpt-image-2', prompt, n: selectedGenCount, size: '1024x1024' })
         });
-
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
 
-        if (data.data && data.data.length > 0) {
+        if (data.data?.length) {
             data.data.forEach((img, i) => {
-                let imageSrc = null;
-                if (img.b64_json) imageSrc = `data:image/png;base64,${img.b64_json}`;
-                else if (img.url) imageSrc = img.url;
-
-                if (imageSrc) {
-                    const resultData = { imageSrc, index: i };
+                const src = img.b64_json ? `data:image/png;base64,${img.b64_json}` : img.url;
+                if (src) {
+                    const resultData = { imageSrc: src, index: i };
                     generatedResults.push(resultData);
-
-                    const card = createResultCard(imageSrc, i, resultData);
-                    resultsGrid.appendChild(card);
+                    resultsGrid.appendChild(createResultCard(src, i, resultData));
                 }
             });
             if (status) status.innerHTML = `✅ Generated ${data.data.length} sprite(s)`;
-        } else {
-            if (status) status.innerHTML = '✅ Done';
         }
     }
 
     async function generateGrok(status, resultsGrid) {
         const tokenInfo = getGrokTokenInfo();
-        if (!tokenInfo) {
-            throw new Error('No SuperGrok token or xAI API key found.');
-        }
+        if (!tokenInfo) throw new Error('No SuperGrok token or xAI API key found.');
 
         const prompt = buildPrompt();
-        const modelsToTry = ['grok-imagine-image-quality', 'grok-imagine-image'];
+        const models = ['grok-imagine-image-quality', 'grok-imagine-image'];
 
-        for (const model of modelsToTry) {
-            const body = { model, prompt, n: selectedGenCount };
-
+        for (const model of models) {
             try {
                 const res = await fetch('/api/xai/images/generations', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${tokenInfo.value}`
-                    },
-                    body: JSON.stringify(body)
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenInfo.value}` },
+                    body: JSON.stringify({ model, prompt, n: selectedGenCount })
                 });
-
-                if (!res.ok) {
-                    const errText = await res.text();
-                    if (errText.includes('Incorrect API key')) continue;
-                    throw new Error(errText);
-                }
+                if (!res.ok) { if ((await res.text()).includes('Incorrect API key')) continue; throw new Error(await res.text()); }
 
                 const data = await res.json();
-
-                if (data.data && data.data.length > 0) {
+                if (data.data?.length) {
                     data.data.forEach((img, i) => {
-                        let imageSrc = null;
-                        if (img.b64_json) imageSrc = `data:image/png;base64,${img.b64_json}`;
-                        else if (img.url) imageSrc = img.url;
-
-                        if (imageSrc) {
-                            const resultData = { imageSrc, index: i };
+                        const src = img.b64_json ? `data:image/png;base64,${img.b64_json}` : img.url;
+                        if (src) {
+                            const resultData = { imageSrc: src, index: i };
                             generatedResults.push(resultData);
-
-                            const card = createResultCard(imageSrc, i, resultData);
-                            resultsGrid.appendChild(card);
+                            resultsGrid.appendChild(createResultCard(src, i, resultData));
                         }
                     });
                     if (status) status.innerHTML = `✅ Generated with ${model}`;
                     return;
                 }
-            } catch (e) {
-                console.error(`[Grok] Error with ${model}:`, e);
-            }
+            } catch (e) { console.error(e); }
         }
-
-        throw new Error('Grok generation failed. Try using an xAI API key from console.x.ai.');
+        throw new Error('Grok generation failed. Use an xAI API key from console.x.ai.');
     }
 
-    async function generateComfyUI(status) {
+    async function generateComfyUI(status, resultsGrid) {
         const baseUrl = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
         const promptText = buildPrompt();
@@ -431,34 +368,72 @@
             "9": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["8",0] } }
         };
 
-        const q = await fetch('/api/comfyui/proxy', {
+        const qRes = await fetch('/api/comfyui/proxy', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ baseUrl, path: '/prompt', method: 'POST', body: { prompt: workflow } })
         });
-        if (!q.ok) throw new Error('ComfyUI queue failed');
+        if (!qRes.ok) throw new Error('ComfyUI queue failed');
 
-        const qd = await q.json();
-        const pid = qd.prompt_id;
-        if (status) status.innerHTML = pid ? '⏳ Generating in ComfyUI...' : '✅ Queued';
+        const qData = await qRes.json();
+        const pid = qData.prompt_id;
+        if (status) status.innerHTML = '⏳ Generating in ComfyUI...';
 
-        if (pid) {
-            for (let i = 0; i < 12; i++) {
-                await new Promise(r => setTimeout(r, 2000));
-                try {
-                    const h = await fetch('/api/comfyui/proxy', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ baseUrl, path: `/history/${pid}`, method: 'GET' })
+        if (!pid) return;
+
+        for (let i = 0; i < 15; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+                const hRes = await fetch('/api/comfyui/proxy', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseUrl, path: `/history/${pid}`, method: 'GET' })
+                });
+                const hist = await hRes.json();
+                const output = hist[pid]?.outputs?.["9"]?.images?.[0];
+
+                if (output?.filename) {
+                    const filename = output.filename;
+
+                    // Fetch the actual image from ComfyUI
+                    const viewRes = await fetch('/api/comfyui/proxy', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            baseUrl,
+                            path: `/view?filename=${filename}&type=output`,
+                            method: 'GET'
+                        })
                     });
-                    const hist = await h.json();
-                    if (hist[pid]?.outputs?.["9"]?.images?.[0]) {
-                        const filename = hist[pid].outputs["9"].images[0].filename;
-                        if (status) status.innerHTML = `✅ Saved as ${filename} (check ComfyUI output folder)`;
-                        return;
+
+                    if (viewRes.ok) {
+                        const blob = await viewRes.blob();
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            const imageSrc = reader.result;
+                            const resultData = { imageSrc, index: 0, filename };
+                            generatedResults.push(resultData);
+
+                            const card = createResultCard(imageSrc, 0, resultData);
+                            if (resultsGrid) resultsGrid.appendChild(card);
+
+                            if (status) status.innerHTML = `✅ Generated (ComfyUI)`;
+
+                            // Auto select first image
+                            if (resultsGrid && resultsGrid.children.length === 1) {
+                                selectResult(card, resultData);
+                            }
+                        };
+                        reader.readAsDataURL(blob);
+                    } else {
+                        if (status) status.innerHTML = `✅ Saved as ${filename} (check ComfyUI output)`;
                     }
-                } catch {}
+                    return;
+                }
+            } catch (e) {
+                // keep polling
             }
-            if (status) status.innerHTML = '⏳ Still processing...';
         }
+
+        if (status) status.innerHTML = '⏳ Still processing in ComfyUI...';
     }
 
     function buildPrompt() {
