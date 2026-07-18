@@ -16,16 +16,9 @@
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
 
     function getGrokAccessToken() {
-        // Try many possible keys used by xAI/SuperGrok OAuth flows
         const possibleKeys = [
-            'grok_access_token',
-            'xai_access_token',
-            'access_token',
-            'grok_token',
-            'superGrokToken',
-            'grokSession',
-            'xai_token',
-            'oauth_token'
+            'grok_access_token', 'xai_access_token', 'access_token',
+            'grok_token', 'superGrokToken', 'grokSession', 'xai_token', 'oauth_token'
         ];
 
         for (const key of possibleKeys) {
@@ -33,15 +26,13 @@
             if (val) return val;
         }
 
-        // Also try to find any key that looks like a JWT
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             const val = localStorage.getItem(key);
             if (val && val.length > 100 && val.split('.').length === 3) {
-                return val; // looks like a JWT
+                return val;
             }
         }
-
         return null;
     }
 
@@ -278,7 +269,6 @@
 
     async function generateGrok(statusEl) {
         const token = getGrokAccessToken();
-
         if (!token) {
             throw new Error('No Grok access token found. Please log in with SuperGrok first.');
         }
@@ -288,142 +278,4 @@
 
         const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style. Race: ${selectedRaceMode}.`;
 
-        const res = await fetch('/api/xai/images/generations', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({
-                prompt: prompt,
-                n: selectedGenCount,
-                size: '1024x1024'
-            })
-        });
-
-        if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`Grok failed: ${res.status} ${text}`);
-        }
-
-        const data = await res.json();
-        if (statusEl) {
-            statusEl.innerHTML = (data.data && data.data.length > 0)
-                ? `✅ Generated ${data.data.length} sprite(s) with Grok` 
-                : '✅ Done with Grok';
-        }
-    }
-
-    async function generateComfyUI(statusEl) {
-        const baseUrl = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
-        const checkpoint = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
-
-        const name = document.getElementById('sgCharName')?.value || 'character';
-        const desc = document.getElementById('sgCharDesc')?.value || '';
-
-        const workflow = {
-            "3": {
-                "class_type": "KSampler",
-                "inputs": {
-                    "seed": Math.floor(Math.random() * 1000000000),
-                    "steps": 20,
-                    "cfg": 7,
-                    "sampler_name": "euler_ancestral",
-                    "scheduler": "normal",
-                    "denoise": 1,
-                    "model": ["4", 0],
-                    "positive": ["6", 0],
-                    "negative": ["7", 0],
-                    "latent_image": ["5", 0]
-                }
-            },
-            "4": {
-                "class_type": "CheckpointLoaderSimple",
-                "inputs": { "ckpt_name": checkpoint }
-            },
-            "5": {
-                "class_type": "EmptyLatentImage",
-                "inputs": { "width": 1024, "height": 1024, "batch_size": selectedGenCount }
-            },
-            "6": {
-                "class_type": "CLIPTextEncode",
-                "inputs": { "text": `${name}, ${desc}, full body sprite, clean background`, "clip": ["4", 1] }
-            },
-            "7": {
-                "class_type": "CLIPTextEncode",
-                "inputs": { "text": "blurry, lowres, bad anatomy", "clip": ["4", 1] }
-            },
-            "8": {
-                "class_type": "VAEDecode",
-                "inputs": { "samples": ["3", 0], "vae": ["4", 2] }
-            },
-            "9": {
-                "class_type": "SaveImage",
-                "inputs": { "filename_prefix": "as_adventurer", "images": ["8", 0] }
-            }
-        };
-
-        const queueRes = await fetch('/api/comfyui/proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                baseUrl: baseUrl,
-                path: '/prompt',
-                method: 'POST',
-                body: { prompt: workflow }
-            })
-        });
-
-        if (!queueRes.ok) {
-            const text = await queueRes.text();
-            throw new Error(`ComfyUI queue failed: ${queueRes.status} ${text}`);
-        }
-
-        const queueData = await queueRes.json();
-        const promptId = queueData.prompt_id;
-
-        if (!promptId) {
-            if (statusEl) statusEl.innerHTML = '✅ Queued in ComfyUI';
-            return;
-        }
-
-        if (statusEl) statusEl.innerHTML = '⏳ Waiting for ComfyUI...';
-
-        // Simple polling for result (max ~30 seconds)
-        for (let i = 0; i < 15; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-
-            try {
-                const historyRes = await fetch('/api/comfyui/proxy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        baseUrl: baseUrl,
-                        path: `/history/${promptId}`,
-                        method: 'GET'
-                    })
-                });
-
-                const history = await historyRes.json();
-                const output = history[promptId]?.outputs;
-
-                if (output) {
-                    if (statusEl) statusEl.innerHTML = '✅ ComfyUI generation complete';
-                    console.log('[ComfyUI] Generation finished', output);
-                    return;
-                }
-            } catch (e) {
-                // ignore polling errors
-            }
-        }
-
-        if (statusEl) statusEl.innerHTML = '⏳ Still processing in ComfyUI (check queue)';
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initSpritePrep);
-    } else {
-        initSpritePrep();
-    }
-
-})();
+        // xAI currently does not support 
