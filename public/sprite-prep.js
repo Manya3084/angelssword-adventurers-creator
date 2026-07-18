@@ -14,7 +14,6 @@
         if (manualKey && manualKey.startsWith('xai-')) {
             return { type: 'api_key', value: manualKey };
         }
-
         const raw = localStorage.getItem('xai_oauth_tokens');
         if (raw) {
             try {
@@ -55,6 +54,7 @@
     }
 
     function initAIGenerateMode() {
+        // Race Mode
         const raceMode = document.getElementById('sgRaceMode');
         if (raceMode) {
             raceMode.addEventListener('click', (e) => {
@@ -68,6 +68,7 @@
             if (def) { def.classList.add('active'); selectedRaceMode = def.dataset.mode || 'normal'; }
         }
 
+        // Key Color
         const colors = document.getElementById('sgColorSwatches');
         if (colors) {
             colors.addEventListener('click', (e) => {
@@ -81,6 +82,7 @@
             if (init) { init.classList.add('selected'); selectedKeyColor = init.dataset.color || '#00FF00'; }
         }
 
+        // Generation Count
         const countBox = document.getElementById('sgGenCount');
         if (countBox) {
             countBox.addEventListener('click', (e) => {
@@ -94,6 +96,7 @@
             if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
         }
 
+        // Uploads
         const charIn = document.getElementById('sgCharRefInput');
         const charPrev = document.getElementById('sgCharRefPreview');
         if (charIn) {
@@ -116,6 +119,7 @@
             });
         }
 
+        // Provider
         const prov = document.getElementById('sgProvider');
         if (prov) {
             prov.addEventListener('click', e => {
@@ -147,13 +151,26 @@
     async function handleGenerate() {
         const status = document.getElementById('sgStatus');
         const btn = document.getElementById('sgGenerateBtn');
+        const resultsSection = document.getElementById('sgResultsSection');
+        const resultsGrid = document.getElementById('sgResultsGrid');
+
         if (btn) btn.disabled = true;
         if (status) { status.innerHTML = '<span class="spinner"></span> Generating...'; status.style.color = ''; }
+        if (resultsSection) resultsSection.classList.add('hidden');
+        if (resultsGrid) resultsGrid.innerHTML = '';
 
         try {
-            if (aiProvider === 'comfyui') await generateComfyUI(status);
-            else if (aiProvider === 'grok') await generateGrok(status);
-            else await generateOpenAI(status);
+            if (aiProvider === 'comfyui') {
+                await generateComfyUI(status);
+            } else if (aiProvider === 'grok') {
+                await generateGrok(status, resultsGrid);
+            } else {
+                await generateOpenAI(status, resultsGrid);
+            }
+
+            if (resultsSection && resultsGrid && resultsGrid.children.length > 0) {
+                resultsSection.classList.remove('hidden');
+            }
         } catch (e) {
             if (status) { status.innerHTML = '❌ ' + e.message; status.style.color = 'var(--red, red)'; }
         } finally {
@@ -161,7 +178,69 @@
         }
     }
 
-    async function generateGrok(status) {
+    function displayGeneratedImage(grid, imageData, label = 'Generated') {
+        if (!grid) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'result-item';
+        wrapper.style.cssText = 'cursor:pointer; border:1px solid var(--border); border-radius:8px; overflow:hidden;';
+
+        const img = document.createElement('img');
+        img.style.cssText = 'width:100%; display:block;';
+
+        if (imageData.startsWith('data:') || imageData.startsWith('http')) {
+            img.src = imageData;
+        } else {
+            // Assume base64
+            img.src = `data:image/png;base64,${imageData}`;
+        }
+
+        img.onload = () => {
+            wrapper.onclick = () => {
+                const canvas = document.getElementById('sgCanvas');
+                if (canvas) {
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = selectedKeyColor;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                }
+            };
+        };
+
+        const caption = document.createElement('div');
+        caption.style.cssText = 'padding:4px 8px; font-size:0.75rem; background:rgba(0,0,0,0.4); color:white;';
+        caption.textContent = label;
+
+        wrapper.appendChild(img);
+        wrapper.appendChild(caption);
+        grid.appendChild(wrapper);
+    }
+
+    async function generateOpenAI(status, resultsGrid) {
+        const prompt = buildPrompt();
+        const res = await fetch('/api/generate', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gpt-image-2', prompt, n: selectedGenCount, size: '1024x1024' })
+        });
+
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+
+        if (data.data && data.data.length > 0) {
+            data.data.forEach((img, i) => {
+                if (img.b64_json) {
+                    displayGeneratedImage(resultsGrid, img.b64_json, `OpenAI #${i+1}`);
+                } else if (img.url) {
+                    displayGeneratedImage(resultsGrid, img.url, `OpenAI #${i+1}`);
+                }
+            });
+            if (status) status.innerHTML = `✅ Generated ${data.data.length} sprite(s)`;
+        } else {
+            if (status) status.innerHTML = '✅ Done (no images returned)';
+        }
+    }
+
+    async function generateGrok(status, resultsGrid) {
         const tokenInfo = getGrokTokenInfo();
         if (!tokenInfo) {
             throw new Error('No SuperGrok token or xAI API key found.');
@@ -171,13 +250,7 @@
         const modelsToTry = ['grok-imagine-image-quality', 'grok-imagine-image'];
 
         for (const model of modelsToTry) {
-            console.log(`[Grok] Trying model: ${model} with token type: ${tokenInfo.type}`);
-
-            const body = {
-                model: model,
-                prompt: prompt,
-                n: selectedGenCount
-            };
+            const body = { model, prompt, n: selectedGenCount };
 
             try {
                 const res = await fetch('/api/xai/images/generations', {
@@ -189,44 +262,31 @@
                     body: JSON.stringify(body)
                 });
 
-                if (res.ok) {
-                    const data = await res.json();
+                if (!res.ok) {
+                    const errText = await res.text();
+                    if (errText.includes('Incorrect API key')) continue;
+                    throw new Error(errText);
+                }
+
+                const data = await res.json();
+
+                if (data.data && data.data.length > 0) {
+                    data.data.forEach((img, i) => {
+                        if (img.b64_json) {
+                            displayGeneratedImage(resultsGrid, img.b64_json, `Grok #${i+1}`);
+                        } else if (img.url) {
+                            displayGeneratedImage(resultsGrid, img.url, `Grok #${i+1}`);
+                        }
+                    });
                     if (status) status.innerHTML = `✅ Generated with ${model}`;
-                    console.log(`[Grok] Success with model: ${model}`);
                     return;
                 }
-
-                const errText = await res.text();
-                console.warn(`[Grok] Failed with ${model}:`, errText);
-
-                // If it's the "Incorrect API key" error, try the next model
-                if (errText.includes('Incorrect API key')) {
-                    continue;
-                }
-
-                // For other errors, throw immediately
-                throw new Error(errText);
-
             } catch (e) {
                 console.error(`[Grok] Error with ${model}:`, e);
-                if (model === modelsToTry[modelsToTry.length - 1]) {
-                    throw e;
-                }
             }
         }
 
-        throw new Error('Both Grok Imagine models failed with current token.');
-    }
-
-    async function generateOpenAI(status) {
-        const prompt = buildPrompt();
-        const res = await fetch('/api/generate', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'gpt-image-2', prompt, n: selectedGenCount, size: '1024x1024' })
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        if (status) status.innerHTML = data.data?.length ? `✅ Generated ${data.data.length} sprite(s)` : '✅ Done';
+        throw new Error('Failed to generate with Grok Imagine. Try using an xAI API key from console.x.ai.');
     }
 
     async function generateComfyUI(status) {
@@ -264,7 +324,7 @@
                     });
                     const hist = await h.json();
                     if (hist[pid]?.outputs) {
-                        if (status) status.innerHTML = '✅ ComfyUI generation complete';
+                        if (status) status.innerHTML = '✅ ComfyUI generation complete (check output folder)';
                         return;
                     }
                 } catch {}
