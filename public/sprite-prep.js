@@ -83,7 +83,7 @@
     }
 
     function initAIGenerateMode() {
-        // === Race Mode ===
+        // Race Mode
         const raceModeContainer = document.getElementById('sgRaceMode');
         if (raceModeContainer) {
             raceModeContainer.addEventListener('click', (e) => {
@@ -103,7 +103,7 @@
             }
         }
 
-        // === Key Color Swatches ===
+        // Key Color
         const colorSwatches = document.getElementById('sgColorSwatches');
         if (colorSwatches) {
             colorSwatches.addEventListener('click', (e) => {
@@ -123,7 +123,7 @@
             }
         }
 
-        // === Simultaneous Generations Count ===
+        // Simultaneous Generations Count
         const genCountContainer = document.getElementById('sgGenCount');
         if (genCountContainer) {
             genCountContainer.addEventListener('click', (e) => {
@@ -136,7 +136,6 @@
                 selectedGenCount = parseInt(btn.dataset.count) || 1;
             });
 
-            // Set default (1)
             const defaultCountBtn = genCountContainer.querySelector('.gen-count-btn.active') || genCountContainer.querySelector('.gen-count-btn');
             if (defaultCountBtn) {
                 defaultCountBtn.classList.add('active');
@@ -232,30 +231,40 @@
         const statusEl = document.getElementById('sgStatus');
         const btn = document.getElementById('sgGenerateBtn');
 
+        console.log('[Generate] Button clicked. Provider:', aiProvider);
+
         if (btn) btn.disabled = true;
-        if (statusEl) statusEl.innerHTML = '<span class="spinner"></span> Generating...';
+        if (statusEl) {
+            statusEl.innerHTML = '<span class="spinner"></span> Generating...';
+            statusEl.style.color = '';
+        }
 
         try {
             if (aiProvider === 'comfyui') {
-                await generateComfyUI();
+                await generateComfyUI(statusEl);
             } else if (aiProvider === 'grok') {
-                await generateGrok();
+                await generateGrok(statusEl);
             } else {
-                await generateOpenAI();
+                await generateOpenAI(statusEl);
             }
         } catch (e) {
-            if (statusEl) statusEl.innerHTML = '❌ ' + e.message;
+            console.error('[Generate] Error:', e);
+            if (statusEl) {
+                statusEl.innerHTML = '❌ Error: ' + (e.message || e);
+                statusEl.style.color = 'var(--red, red)';
+            }
         } finally {
             if (btn) btn.disabled = false;
         }
     }
 
-    async function generateOpenAI() {
-        const statusEl = document.getElementById('sgStatus');
+    async function generateOpenAI(statusEl) {
         const name = document.getElementById('sgCharName')?.value || 'character';
         const desc = document.getElementById('sgCharDesc')?.value || '';
 
         const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style. Race: ${selectedRaceMode}.`;
+
+        console.log('[Generate] Calling OpenAI with prompt:', prompt);
 
         const res = await fetch('/api/generate', {
             method: 'POST',
@@ -268,22 +277,29 @@
             })
         });
 
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`OpenAI request failed: ${res.status} - ${errText}`);
+        }
+
         const data = await res.json();
-        if (statusEl) {
-            statusEl.innerHTML = (data.data && data.data.length > 0)
-                ? `✅ Generated ${data.data.length} image(s) with OpenAI`
-                : '❌ Generation failed';
+
+        if (data.data && data.data.length > 0) {
+            if (statusEl) statusEl.innerHTML = `✅ Generated ${data.data.length} sprite(s) with OpenAI`;
+            console.log('[Generate] Success:', data);
+        } else {
+            throw new Error(data.error || 'No images returned from OpenAI');
         }
     }
 
-    async function generateGrok() {
-        const statusEl = document.getElementById('sgStatus');
-        if (statusEl) statusEl.innerHTML = '✨ Grok generation triggered (check console)';
+    async function generateGrok(statusEl) {
+        if (statusEl) statusEl.innerHTML = '✨ Grok generation requires full OAuth implementation (coming soon)';
+        console.log('[Generate] Grok path selected (stub)');
     }
 
-    async function generateComfyUI() {
-        const statusEl = document.getElementById('sgStatus');
-        if (statusEl) statusEl.innerHTML = '🖥️ Request sent to local ComfyUI';
+    async function generateComfyUI(statusEl) {
+        if (statusEl) statusEl.innerHTML = '🖥️ ComfyUI generation requires workflow configuration';
+        console.log('[Generate] ComfyUI path selected (stub)');
     }
 
     if (document.readyState === 'loading') {
