@@ -11,6 +11,13 @@
     let generatedResults = [];
     let currentSelectedResult = null;
 
+    // Default values that match the placeholders in the HTML
+    const DEFAULTS = {
+        name: 'Mirrime the Mage',
+        desc: 'Blue hair, red cape, golden feather cap, adventurer outfit',
+        action: 'standing pose, confident expression'
+    };
+
     function getGrokTokenInfo() {
         const manualKey = localStorage.getItem('xai_api_key');
         if (manualKey && manualKey.startsWith('xai-')) {
@@ -171,11 +178,19 @@
         else btn.innerHTML = '✨ Generate Sprite (OpenAI)';
     }
 
+    // Returns the actual value the user typed, or the strong default if the field is empty
+    function getFieldValue(id, defaultValue) {
+        const el = document.getElementById(id);
+        if (!el) return defaultValue;
+        const val = (el.value || '').trim();
+        return val.length > 0 ? val : defaultValue;
+    }
+
     // Normal prompt used by OpenAI / Grok
     function buildPrompt() {
-        const name = document.getElementById('sgCharName')?.value || 'character';
-        const desc = document.getElementById('sgCharDesc')?.value || '';
-        const action = document.getElementById('sgCharAction')?.value || '';
+        const name = getFieldValue('sgCharName', DEFAULTS.name);
+        const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
+        const action = getFieldValue('sgCharAction', DEFAULTS.action);
 
         let p = `Full body clean sprite of ${name}. ${desc}. ${action}. White background, game asset style, clean lines. Race: ${selectedRaceMode}.`;
 
@@ -185,13 +200,12 @@
         return p;
     }
 
-    // Special prompt for Pony Diffusion V6 XL (prevents black images)
+    // Special prompt for Pony Diffusion V6 XL
     function buildComfyPrompt() {
-        const name = document.getElementById('sgCharName')?.value || 'character';
-        const desc = document.getElementById('sgCharDesc')?.value || '';
-        const action = document.getElementById('sgCharAction')?.value || '';
+        const name = getFieldValue('sgCharName', DEFAULTS.name);
+        const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
+        const action = getFieldValue('sgCharAction', DEFAULTS.action);
 
-        // Classic Pony tags that actually work
         let positive = `score_9, score_8_up, score_7_up, source_anime, rating_safe, ` +
                        `full body, standing, clean sprite, white background, simple background, ` +
                        `game asset, character design, ${name}, ${desc}, ${action}, ` +
@@ -417,10 +431,8 @@
         const base = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
 
-        // Improved positive prompt for Pony
         const positiveText = buildComfyPrompt();
 
-        // Strong negative prompt that prevents black / empty results
         const negativeText = 'score_6, score_5, score_4, blurry, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, artist name, black background, solid black, empty, pure black';
 
         const wf = {
