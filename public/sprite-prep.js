@@ -11,7 +11,6 @@
     let generatedResults = [];
     let currentSelectedResult = null;
 
-    // Default values that match the placeholders
     const DEFAULTS = {
         name: 'Mirrime the Mage',
         desc: 'Blue hair, red cape, golden feather cap, adventurer outfit',
@@ -63,7 +62,6 @@
     }
 
     function initAIGenerateMode() {
-        // Race Mode
         const raceMode = document.getElementById('sgRaceMode');
         if (raceMode) {
             raceMode.addEventListener('click', (e) => {
@@ -77,7 +75,6 @@
             if (def) { def.classList.add('active'); selectedRaceMode = def.dataset.mode || 'normal'; }
         }
 
-        // Key Color
         const colors = document.getElementById('sgColorSwatches');
         if (colors) {
             colors.addEventListener('click', (e) => {
@@ -91,7 +88,6 @@
             if (init) { init.classList.add('selected'); selectedKeyColor = init.dataset.color || '#00FF00'; }
         }
 
-        // Generation Count
         const countBox = document.getElementById('sgGenCount');
         if (countBox) {
             countBox.addEventListener('click', (e) => {
@@ -105,7 +101,7 @@
             if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
         }
 
-        // Character Reference Upload
+        // Character Reference
         const charIn = document.getElementById('sgCharRefInput');
         const charPrev = document.getElementById('sgCharRefPreview');
         if (charIn) {
@@ -124,7 +120,7 @@
             });
         }
 
-        // Style Reference Upload
+        // Style Reference
         const styleIn = document.getElementById('sgStyleRefInput');
         const stylePrev = document.getElementById('sgStyleRefPreview');
         if (styleIn) {
@@ -143,7 +139,6 @@
             });
         }
 
-        // Provider
         const prov = document.getElementById('sgProvider');
         if (prov) {
             prov.addEventListener('click', e => {
@@ -424,71 +419,165 @@
         throw new Error('Grok generation failed. Use an xAI API key from console.x.ai.');
     }
 
+    // Upload image to ComfyUI and return the filename
+    async function uploadImageToComfy(baseUrl, dataUrl, filename) {
+        const res = await fetch('/api/comfyui/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                baseUrl: baseUrl,
+                image: dataUrl,
+                filename: filename || `as_ref_${Date.now()}.png`
+            })
+        });
+        if (!res.ok) throw new Error('Failed to upload reference image to ComfyUI');
+        const data = await res.json();
+        // ComfyUI usually returns { name: "filename.png", subfolder: "", type: "input" }
+        return data.name || data.filename || filename;
+    }
+
     async function generateComfyUI(status, grid) {
         const base = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
-        // Prefer a more stable default if the user hasn't set one
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
 
-        const positiveText = buildComfyPrompt();
+        if (status) status.innerHTML = '⏳ Preparing IP-Adapter + Pony workflow...';
 
+        // Upload character reference if available
+        let refFilename = null;
+        if (charRefBase64) {
+            try {
+                refFilename = await uploadImageToComfy(base, charRefBase64, `as_char_ref_${Date.now()}.png`);
+                console.log('[ComfyUI] Uploaded character reference as:', refFilename);
+            } catch (e) {
+                console.warn('[ComfyUI] Could not upload reference, falling back to text-only:', e);
+            }
+        }
+
+        const positiveText = buildComfyPrompt();
         const negativeText = 'score_6, score_5, score_4, blurry, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, artist name, black background, solid black, empty, pure black';
 
-        // More stable settings for Intel Arc (lower CFG + safer sampler)
-        const wf = {
-            "3": {
-                "class_type": "KSampler",
-                "inputs": {
-                    "seed": Math.floor(Math.random() * 1e9),
-                    "steps": 28,
-                    "cfg": 4.5,                    // Lower CFG helps prevent NaNs on Arc
-                    "sampler_name": "dpmpp_2m",   // More stable than euler_ancestral on many Arc setups
-                    "scheduler": "karras",
-                    "denoise": 1,
-                    "model": ["4", 0],
-                    "positive": ["6", 0],
-                    "negative": ["7", 0],
-                    "latent_image": ["5", 0]
+        // -------------------------------------------------------
+        // Workflow: IP-Adapter Advanced + Pony @ 1216x832
+        // This is the original intended pipeline
+        // -------------------------------------------------------
+        let wf;
+
+        if (refFilename) {
+            // Full IP-Adapter workflow
+            wf = {
+                "1": { // Checkpoint
+                    "class_type": "CheckpointLoaderSimple",
+                    "inputs": { "ckpt_name": ckpt }
+                },
+                "2": { // Load the uploaded character reference
+                    "class_type": "LoadImage",
+                    "inputs": { "image": refFilename }
+                },
+                "3": { // IP-Adapter Model Loader (common name)
+                    "class_type": "IPAdapterModelLoader",
+                    "inputs": { "ipadapter_file": "ip-adapter-plus_sdxl_vit-h.safetensors" }
+                },
+                "4": { // CLIP Vision
+                    "class_type": "CLIPVisionLoader",
+                    "inputs": { "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" }
+                },
+                "5": { // IPAdapter Advanced
+                    "class_type": "IPAdapterAdvanced",
+                    "inputs": {
+                        "model": ["1", 0],
+                        "ipadapter": ["3", 0],
+                        "image": ["2", 0],
+                        "clip_vision": ["4", 0],
+                        "weight": 0.85,
+                        "weight_type": "linear",
+                        "combine_embeds": "concat",
+                        "start_at": 0.0,
+                        "end_at": 1.0,
+                        "embeds_scaling": "V only"
+                    }
+                },
+                "6": { // Positive prompt
+                    "class_type": "CLIPTextEncode",
+                    "inputs": { "text": positiveText, "clip": ["1", 1] }
+                },
+                "7": { // Negative prompt
+                    "class_type": "CLIPTextEncode",
+                    "inputs": { "text": negativeText, "clip": ["1", 1] }
+                },
+                "8": { // Empty latent @ 1216x832
+                    "class_type": "EmptyLatentImage",
+                    "inputs": { "width": 1216, "height": 832, "batch_size": 1 }
+                },
+                "9": { // KSampler
+                    "class_type": "KSampler",
+                    "inputs": {
+                        "seed": Math.floor(Math.random() * 1e9),
+                        "steps": 28,
+                        "cfg": 5.0,
+                        "sampler_name": "dpmpp_2m",
+                        "scheduler": "karras",
+                        "denoise": 1,
+                        "model": ["5", 0],   // from IPAdapterAdvanced
+                        "positive": ["6", 0],
+                        "negative": ["7", 0],
+                        "latent_image": ["8", 0]
+                    }
+                },
+                "10": { // VAE Decode
+                    "class_type": "VAEDecode",
+                    "inputs": { "samples": ["9", 0], "vae": ["1", 2] }
+                },
+                "11": { // Save
+                    "class_type": "SaveImage",
+                    "inputs": { "filename_prefix": "as_adventurer", "images": ["10", 0] }
                 }
-            },
-            "4": {
-                "class_type": "CheckpointLoaderSimple",
-                "inputs": { "ckpt_name": ckpt }
-            },
-            "5": {
-                "class_type": "EmptyLatentImage",
-                "inputs": { "width": 1024, "height": 1024, "batch_size": selectedGenCount }
-            },
-            "6": {
-                "class_type": "CLIPTextEncode",
-                "inputs": { "text": positiveText, "clip": ["4", 1] }
-            },
-            "7": {
-                "class_type": "CLIPTextEncode",
-                "inputs": { "text": negativeText, "clip": ["4", 1] }
-            },
-            "8": {
-                "class_type": "VAEDecode",
-                "inputs": { "samples": ["3", 0], "vae": ["4", 2] }
-            },
-            "9": {
-                "class_type": "SaveImage",
-                "inputs": { "filename_prefix": "as_adventurer", "images": ["8", 0] }
-            }
-        };
+            };
+        } else {
+            // Fallback pure text-to-image if no reference was uploaded
+            wf = {
+                "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
+                "2": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
+                "3": { "class_type": "CLIPTextEncode", "inputs": { "text": negativeText, "clip": ["1", 1] } },
+                "4": { "class_type": "EmptyLatentImage", "inputs": { "width": 1216, "height": 832, "batch_size": 1 } },
+                "5": {
+                    "class_type": "KSampler",
+                    "inputs": {
+                        "seed": Math.floor(Math.random() * 1e9),
+                        "steps": 28,
+                        "cfg": 5.0,
+                        "sampler_name": "dpmpp_2m",
+                        "scheduler": "karras",
+                        "denoise": 1,
+                        "model": ["1", 0],
+                        "positive": ["2", 0],
+                        "negative": ["3", 0],
+                        "latent_image": ["4", 0]
+                    }
+                },
+                "6": { "class_type": "VAEDecode", "inputs": { "samples": ["5", 0], "vae": ["1", 2] } },
+                "7": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["6", 0] } }
+            };
+        }
+
+        // Find the SaveImage node id for later
+        const saveNodeId = refFilename ? "11" : "7";
 
         const q = await fetch('/api/comfyui/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ baseUrl: base, path: '/prompt', method: 'POST', body: { prompt: wf } })
         });
-        if (!q.ok) throw new Error('ComfyUI queue failed');
+        if (!q.ok) {
+            const errText = await q.text();
+            throw new Error('ComfyUI queue failed: ' + errText);
+        }
         const qd = await q.json();
         const pid = qd.prompt_id;
-        if (status) status.innerHTML = '⏳ Generating with Pony (stable settings)...';
+        if (status) status.innerHTML = refFilename ? '⏳ Generating with IP-Adapter + Pony @ 1216×832...' : '⏳ Generating with Pony @ 1216×832...';
 
         if (!pid) return;
 
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 40; i++) {
             await new Promise(r => setTimeout(r, 2000));
             try {
                 const h = await fetch('/api/comfyui/proxy', {
@@ -497,7 +586,7 @@
                     body: JSON.stringify({ baseUrl: base, path: `/history/${pid}`, method: 'GET' })
                 });
                 const hist = await h.json();
-                const out = hist[pid]?.outputs?.["9"]?.images?.[0];
+                const out = hist[pid]?.outputs?.[saveNodeId]?.images?.[0];
                 if (out?.filename) {
                     const fname = out.filename;
                     console.log('[ComfyUI] Got filename:', fname);
@@ -527,7 +616,7 @@
                             const card = createResultCard(dataUrl, 0, rd);
                             if (grid) grid.appendChild(card);
 
-                            if (status) status.innerHTML = `✅ Generated (ComfyUI / Pony)`;
+                            if (status) status.innerHTML = `✅ Generated (IP-Adapter + Pony)`;
 
                             if (grid && grid.children.length === 1) {
                                 selectResult(card, rd);
