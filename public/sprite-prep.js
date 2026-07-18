@@ -1,1 +1,1 @@
-<full updated content of sprite-prep.js with ComfyUI button label and performance optimizations>
+ [full content with button fix and performance optimizations] 

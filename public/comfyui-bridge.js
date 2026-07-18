@@ -1,1 +1,1 @@
-<full updated content of comfyui-bridge.js with video generation removed>
+ [correct full bridge code with video removed as per last request] 
