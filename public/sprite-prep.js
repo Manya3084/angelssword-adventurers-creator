@@ -15,44 +15,12 @@
     let styleRefBase64 = null;
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
 
-    function renderCanvas() {
-        if (!spriteImage) return;
-        const canvas = document.getElementById('spCanvas');
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        const CW = 1280, CH = 720;
-
-        ctx.fillStyle = selectedKeyColor;
-        ctx.fillRect(0, 0, CW, CH);
-
-        const img = spriteImage;
-        const scale = zoom / 100;
-        const drawW = Math.round(img.naturalWidth * scale);
-        const drawH = Math.round(img.naturalHeight * scale);
-        const x = Math.round((CW - drawW) / 2);
-        const y = CH - drawH + offset;
-
-        ctx.drawImage(img, x, y, drawW, drawH);
-    }
-
-    const debouncedRender = (() => {
-        let timeout;
-        return () => { clearTimeout(timeout); timeout = setTimeout(renderCanvas, 60); };
-    })();
-
-    function loadSprite(file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const img = new Image();
-            img.onload = () => {
-                spriteImage = img;
-                spriteFileName = file.name.replace(/\.\w+$/i, '');
-                document.getElementById('spManualStage2').classList.remove('disabled');
-                document.getElementById('spManualStage3').classList.remove('disabled');
-                renderCanvas();
-            };
-            img.src = e.target.result;
-        };
-        reader.readAsDataURL(file);
+    function getGrokAccessToken() {
+        // Try common storage keys used by the OAuth flow
+        return localStorage.getItem('grok_access_token') ||
+               localStorage.getItem('xai_access_token') ||
+               localStorage.getItem('access_token') ||
+               null;
     }
 
     function initSpritePrep() {
@@ -287,6 +255,12 @@
     }
 
     async function generateGrok(statusEl) {
+        const token = getGrokAccessToken();
+
+        if (!token) {
+            throw new Error('No Grok access token found. Please log in with SuperGrok first.');
+        }
+
         const name = document.getElementById('sgCharName')?.value || 'character';
         const desc = document.getElementById('sgCharDesc')?.value || '';
 
@@ -294,7 +268,10 @@
 
         const res = await fetch('/api/xai/images/generations', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
             body: JSON.stringify({
                 prompt: prompt,
                 n: selectedGenCount,
@@ -318,14 +295,10 @@
     async function generateComfyUI(statusEl) {
         const baseUrl = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
         const checkpoint = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
-        const ipadapter = localStorage.getItem('comfyui_ipadapter_model') || '';
-        const clipvision = localStorage.getItem('comfyui_clip_vision_model') || '';
-        const ipWeight = parseFloat(localStorage.getItem('comfyui_ipadapter_weight')) || 0.55;
 
         const name = document.getElementById('sgCharName')?.value || 'character';
         const desc = document.getElementById('sgCharDesc')?.value || '';
 
-        // Very basic workflow trigger (user can expand this later)
         const workflow = {
             "3": {
                 "class_type": "KSampler",
@@ -368,7 +341,6 @@
             }
         };
 
-        // If IP-Adapter is configured, we can extend the workflow later
         const res = await fetch('/api/comfyui/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -388,7 +360,7 @@
         const data = await res.json();
         if (statusEl) {
             statusEl.innerHTML = data.prompt_id 
-                ? `✅ Queued in ComfyUI (ID: ${data.prompt_id.substring(0,8)}...)` 
+                ? `✅ Queued in ComfyUI` 
                 : '✅ Sent to ComfyUI';
         }
     }
