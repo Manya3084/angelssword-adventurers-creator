@@ -6,6 +6,7 @@
     let spriteFileName = '';
     let selectedKeyColor = '#00FF00';
     let selectedRaceMode = 'normal';
+    let selectedGenCount = 1;
     let offset = parseInt(localStorage.getItem('sp-offset')) || 0;
     let zoom = parseInt(localStorage.getItem('sp-zoom')) || 100;
 
@@ -95,7 +96,6 @@
                 selectedRaceMode = btn.dataset.mode || 'normal';
             });
 
-            // Set default active
             const defaultBtn = raceModeContainer.querySelector('.mode-btn.active') || raceModeContainer.querySelector('.mode-btn');
             if (defaultBtn) {
                 defaultBtn.classList.add('active');
@@ -103,7 +103,7 @@
             }
         }
 
-        // === Key Color Swatches (Generate mode) ===
+        // === Key Color Swatches ===
         const colorSwatches = document.getElementById('sgColorSwatches');
         if (colorSwatches) {
             colorSwatches.addEventListener('click', (e) => {
@@ -116,11 +116,31 @@
                 selectedKeyColor = swatch.dataset.color || '#00FF00';
             });
 
-            // Set initial selected
             const initialSwatch = colorSwatches.querySelector('.color-swatch.selected') || colorSwatches.querySelector('.color-swatch');
             if (initialSwatch) {
                 initialSwatch.classList.add('selected');
                 selectedKeyColor = initialSwatch.dataset.color || '#00FF00';
+            }
+        }
+
+        // === Simultaneous Generations Count ===
+        const genCountContainer = document.getElementById('sgGenCount');
+        if (genCountContainer) {
+            genCountContainer.addEventListener('click', (e) => {
+                const btn = e.target.closest('.gen-count-btn');
+                if (!btn) return;
+
+                genCountContainer.querySelectorAll('.gen-count-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                selectedGenCount = parseInt(btn.dataset.count) || 1;
+            });
+
+            // Set default (1)
+            const defaultCountBtn = genCountContainer.querySelector('.gen-count-btn.active') || genCountContainer.querySelector('.gen-count-btn');
+            if (defaultCountBtn) {
+                defaultCountBtn.classList.add('active');
+                selectedGenCount = parseInt(defaultCountBtn.dataset.count) || 1;
             }
         }
 
@@ -240,21 +260,30 @@
         const res = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'gpt-image-2', prompt, n: 1, size: '1024x1024' })
+            body: JSON.stringify({
+                model: 'gpt-image-2',
+                prompt: prompt,
+                n: selectedGenCount,
+                size: '1024x1024'
+            })
         });
 
         const data = await res.json();
-        if (statusEl) statusEl.innerHTML = data.data ? '✅ Generated with OpenAI' : '❌ Failed';
+        if (statusEl) {
+            statusEl.innerHTML = (data.data && data.data.length > 0)
+                ? `✅ Generated ${data.data.length} image(s) with OpenAI`
+                : '❌ Generation failed';
+        }
     }
 
     async function generateGrok() {
         const statusEl = document.getElementById('sgStatus');
-        if (statusEl) statusEl.innerHTML = '✨ Grok generation triggered';
+        if (statusEl) statusEl.innerHTML = '✨ Grok generation triggered (check console)';
     }
 
     async function generateComfyUI() {
         const statusEl = document.getElementById('sgStatus');
-        if (statusEl) statusEl.innerHTML = '🖥️ Sent to local ComfyUI';
+        if (statusEl) statusEl.innerHTML = '🖥️ Request sent to local ComfyUI';
     }
 
     if (document.readyState === 'loading') {
