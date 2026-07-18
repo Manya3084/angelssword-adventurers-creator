@@ -5,6 +5,7 @@
     let spriteImage = null;
     let spriteFileName = '';
     let selectedKeyColor = '#00FF00';
+    let selectedRaceMode = 'normal';
     let offset = parseInt(localStorage.getItem('sp-offset')) || 0;
     let zoom = parseInt(localStorage.getItem('sp-zoom')) || 100;
 
@@ -54,7 +55,6 @@
     }
 
     function initSpritePrep() {
-        // Mode switching
         const modeSelector = document.getElementById('spritePrepMode');
         const manualMode = document.getElementById('spriteManualMode');
         const generateMode = document.getElementById('spriteGenerateMode');
@@ -82,6 +82,48 @@
     }
 
     function initAIGenerateMode() {
+        // === Race Mode ===
+        const raceModeContainer = document.getElementById('sgRaceMode');
+        if (raceModeContainer) {
+            raceModeContainer.addEventListener('click', (e) => {
+                const btn = e.target.closest('.mode-btn');
+                if (!btn) return;
+
+                raceModeContainer.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                selectedRaceMode = btn.dataset.mode || 'normal';
+            });
+
+            // Set default active
+            const defaultBtn = raceModeContainer.querySelector('.mode-btn.active') || raceModeContainer.querySelector('.mode-btn');
+            if (defaultBtn) {
+                defaultBtn.classList.add('active');
+                selectedRaceMode = defaultBtn.dataset.mode || 'normal';
+            }
+        }
+
+        // === Key Color Swatches (Generate mode) ===
+        const colorSwatches = document.getElementById('sgColorSwatches');
+        if (colorSwatches) {
+            colorSwatches.addEventListener('click', (e) => {
+                const swatch = e.target.closest('.color-swatch');
+                if (!swatch) return;
+
+                colorSwatches.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+                swatch.classList.add('selected');
+
+                selectedKeyColor = swatch.dataset.color || '#00FF00';
+            });
+
+            // Set initial selected
+            const initialSwatch = colorSwatches.querySelector('.color-swatch.selected') || colorSwatches.querySelector('.color-swatch');
+            if (initialSwatch) {
+                initialSwatch.classList.add('selected');
+                selectedKeyColor = initialSwatch.dataset.color || '#00FF00';
+            }
+        }
+
         // Character Reference
         const charRefInput = document.getElementById('sgCharRefInput');
         const charRefPreview = document.getElementById('sgCharRefPreview');
@@ -193,7 +235,7 @@
         const name = document.getElementById('sgCharName')?.value || 'character';
         const desc = document.getElementById('sgCharDesc')?.value || '';
 
-        const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style.`;
+        const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style. Race: ${selectedRaceMode}.`;
 
         const res = await fetch('/api/generate', {
             method: 'POST',
@@ -207,7 +249,7 @@
 
     async function generateGrok() {
         const statusEl = document.getElementById('sgStatus');
-        if (statusEl) statusEl.innerHTML = '✨ Grok generation triggered (OAuth flow)';
+        if (statusEl) statusEl.innerHTML = '✨ Grok generation triggered';
     }
 
     async function generateComfyUI() {
