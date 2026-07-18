@@ -149,6 +149,31 @@ app.post('/api/xai/images/generations', async (req, res) => {
 // ============================================
 // ComfyUI
 // ============================================
+function sanitizeComfyBase(baseUrl) {
+    if (!baseUrl) return null;
+    try {
+        const u = new URL(baseUrl);
+        const host = u.hostname;
+        const ok = host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') || host.startsWith('10.');
+        return ok ? u.origin : null;
+    } catch {
+        return null;
+    }
+}
+
+app.post('/api/comfyui/test', async (req, res) => {
+    try {
+        const origin = sanitizeComfyBase((req.body && req.body.baseUrl) || 'http://127.0.0.1:8188');
+        if (!origin) return res.status(400).json({ error: 'Invalid or non-local ComfyUI URL' });
+
+        const response = await fetch(`${origin}/system_stats`, { timeout: 10000 });
+        const text = await response.text();
+        res.status(response.status).type('application/json').send(text);
+    } catch (err) {
+        res.status(502).json({ error: `Cannot reach ComfyUI: ${err.message}` });
+    }
+});
+
 app.post('/api/comfyui/proxy', async (req, res) => {
     try {
         const { baseUrl, path, method, body, isBinary } = req.body || {};
