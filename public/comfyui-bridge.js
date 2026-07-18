@@ -27,40 +27,39 @@
 
     function buildComfyUISettingsHTML() {
         return `
-            <div class="settings-section">
-                <h3>ComfyUI Local</h3>
+            <div class="glass-panel" id="comfyuiSettingsPanel">
+                <div class="panel-title"><span class="title-icon">🖥️</span> ComfyUI Local</div>
                 
-                <div class="setting-item">
+                <div class="form-row">
                     <label>ComfyUI URL</label>
                     <input type="text" id="comfyuiUrl" value="${getSetting('URL')}">
                 </div>
 
-                <div class="setting-item">
+                <div class="form-row">
                     <label>Sprite Checkpoint</label>
                     <input type="text" id="comfyuiCheckpoint" value="${getSetting('CKPT')}">
                 </div>
 
-                <div class="setting-item">
+                <div class="form-row">
                     <label>IP-Adapter Model</label>
                     <input type="text" id="comfyuiIpAdapter" value="${getSetting('IPADAPTER')}">
                 </div>
 
-                <div class="setting-item">
+                <div class="form-row">
                     <label>CLIP Vision Model</label>
                     <input type="text" id="comfyuiClipVision" value="${getSetting('CLIPVISION')}">
                 </div>
 
-                <div class="setting-item">
-                    <label>IP-Adapter Weight</label>
+                <div class="form-row">
+                    <label>IP-Adapter Weight <span id="comfyuiIpWeightValue" class="text-gold">${getSetting('IP_WEIGHT')}</span></label>
                     <input type="range" id="comfyuiIpWeight" min="0" max="2" step="0.05" value="${getSetting('IP_WEIGHT')}">
-                    <span id="comfyuiIpWeightValue">${getSetting('IP_WEIGHT')}</span>
                 </div>
 
-                <div class="setting-actions">
-                    <button id="comfyuiTestBtn" class="btn">Test Connection</button>
-                    <button id="comfyuiSaveBtn" class="btn primary">Save</button>
-                    <span id="comfyuiStatus" class="status-text"></span>
+                <div class="btn-group mt-2">
+                    <button id="comfyuiTestBtn" class="btn btn-secondary">Test Connection</button>
+                    <button id="comfyuiSaveBtn" class="btn btn-primary">Save Settings</button>
                 </div>
+                <div id="comfyuiStatus" class="mt-1 text-sm"></div>
             </div>
         `;
     }
@@ -76,15 +75,16 @@
         const saveBtn = document.getElementById('comfyuiSaveBtn');
         const statusEl = document.getElementById('comfyuiStatus');
 
-        if (!urlInput) return;
+        if (!urlInput || !weightInput) return;
 
         weightInput.addEventListener('input', () => {
-            weightValue.textContent = weightInput.value;
+            if (weightValue) weightValue.textContent = weightInput.value;
         });
 
         testBtn.addEventListener('click', async () => {
-            statusEl.textContent = 'Testing...';
-            statusEl.className = 'status-text';
+            if (!statusEl) return;
+            statusEl.innerHTML = '<span class="spinner"></span> Testing...';
+            statusEl.className = 'text-sm text-dim';
 
             try {
                 const resp = await fetch('/api/comfyui/test', {
@@ -95,15 +95,15 @@
                 const data = await resp.json();
 
                 if (resp.ok) {
-                    statusEl.textContent = '✅ Connected';
-                    statusEl.className = 'status-text success';
+                    statusEl.innerHTML = '✅ Connected to ComfyUI';
+                    statusEl.className = 'text-sm text-green';
                 } else {
-                    statusEl.textContent = '❌ Failed';
-                    statusEl.className = 'status-text error';
+                    statusEl.innerHTML = '❌ ' + (data.error || 'Connection failed');
+                    statusEl.className = 'text-sm text-red';
                 }
             } catch (e) {
-                statusEl.textContent = '❌ ' + e.message;
-                statusEl.className = 'status-text error';
+                statusEl.innerHTML = '❌ ' + e.message;
+                statusEl.className = 'text-sm text-red';
             }
         });
 
@@ -114,38 +114,72 @@
             setSetting('CLIPVISION', clipInput.value.trim());
             setSetting('IP_WEIGHT', weightInput.value);
 
-            statusEl.textContent = '✅ Saved';
-            statusEl.className = 'status-text success';
-
-            setTimeout(() => { if (statusEl.textContent === '✅ Saved') statusEl.textContent = ''; }, 2000);
+            if (statusEl) {
+                statusEl.innerHTML = '✅ Settings saved';
+                statusEl.className = 'text-sm text-green';
+                setTimeout(() => {
+                    if (statusEl && statusEl.innerHTML.includes('saved')) {
+                        statusEl.innerHTML = '';
+                    }
+                }, 2000);
+            }
         });
 
-        weightValue.textContent = weightInput.value;
+        if (weightValue) weightValue.textContent = weightInput.value;
     }
 
-    function initComfyUISettings() {
-        const settingsContent = document.getElementById('settingsContent');
-        if (!settingsContent || document.getElementById('comfyuiUrl')) return;
+    function injectComfyUISettings() {
+        // Try multiple possible containers
+        let container = document.querySelector('#tab-settings .settings-section');
+        if (!container) container = document.getElementById('settingsContent');
+        if (!container) container = document.querySelector('#tab-settings');
 
-        const section = document.createElement('div');
-        section.innerHTML = buildComfyUISettingsHTML();
-        settingsContent.appendChild(section.firstElementChild);
+        if (!container) return false;
+        if (document.getElementById('comfyuiSettingsPanel')) return true;
+
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = buildComfyUISettingsHTML();
+        container.appendChild(wrapper.firstElementChild);
 
         wireComfyUISettings();
+        return true;
     }
 
+    function tryInject() {
+        if (injectComfyUISettings()) return;
+
+        // Retry a few times in case the DOM is still loading
+        let attempts = 0;
+        const interval = setInterval(() => {
+            attempts++;
+            if (injectComfyUISettings() || attempts > 8) {
+                clearInterval(interval);
+            }
+        }, 400);
+    }
+
+    // Watch for Settings tab becoming active
     const observer = new MutationObserver(() => {
-        if (document.getElementById('settingsModal') && !document.getElementById('comfyuiUrl')) {
-            initComfyUISettings();
+        const settingsTab = document.getElementById('tab-settings');
+        if (settingsTab && settingsTab.classList.contains('active')) {
+            tryInject();
         }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+
+    observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class'] });
+
+    // Also try on load and when clicking Settings tab
+    document.addEventListener('click', (e) => {
+        if (e.target.closest('[data-tab="tab-settings"]')) {
+            setTimeout(tryInject, 300);
+        }
+    });
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initComfyUISettings);
+        document.addEventListener('DOMContentLoaded', () => setTimeout(tryInject, 800));
     } else {
-        setTimeout(initComfyUISettings, 800);
+        setTimeout(tryInject, 800);
     }
 
-    console.log('[ComfyUI Bridge] Settings panel restored');
+    console.log('[ComfyUI Bridge] Loaded - will inject settings when Settings tab is opened');
 })();
