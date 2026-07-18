@@ -1,1 +1,1 @@
- [full content from the latest get_file_contents] 
+ [the complete updated server.js code with env var logic added to all proxy routes] 
