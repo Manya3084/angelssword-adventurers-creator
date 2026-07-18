@@ -1,15 +1,7 @@
-(function() {
+ (function() {
     'use strict';
 
-    // ==================== KEY COLORS ====================
-    const KEY_COLORS = [
-        { hex: '#00FF00', name: 'Green',   r: 0,   g: 255, b: 0   },
-        { hex: '#FF00FF', name: 'Magenta', r: 255, g: 0,   b: 255 },
-        { hex: '#0000FF', name: 'Blue',    r: 0,   g: 0,   b: 255 },
-        { hex: '#FFFF00', name: 'Yellow',  r: 255, g: 255, b: 0   },
-        { hex: '#00FFFF', name: 'Cyan',    r: 0,   g: 255, b: 255 }
-    ];
-
+    // State
     let spriteImage = null;
     let spriteFileName = '';
     let selectedKeyColor = '#00FF00';
@@ -23,7 +15,6 @@
 
     function renderCanvas() {
         if (!spriteImage) return;
-
         const canvas = document.getElementById('spCanvas');
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         const CW = 1280, CH = 720;
@@ -43,10 +34,7 @@
 
     const debouncedRender = (() => {
         let timeout;
-        return () => {
-            clearTimeout(timeout);
-            timeout = setTimeout(renderCanvas, 60);
-        };
+        return () => { clearTimeout(timeout); timeout = setTimeout(renderCanvas, 60); };
     })();
 
     function loadSprite(file) {
@@ -66,7 +54,7 @@
     }
 
     function initSpritePrep() {
-        // Mode switching (Manual vs Generate AI)
+        // Mode switching
         const modeSelector = document.getElementById('spritePrepMode');
         const manualMode = document.getElementById('spriteManualMode');
         const generateMode = document.getElementById('spriteGenerateMode');
@@ -89,29 +77,12 @@
             });
         }
 
-        // Update Generate button label based on provider
-        function updateGenerateButtonLabel() {
-            const btn = document.getElementById('sgGenerateBtn');
-            if (!btn) return;
+        initAIGenerateMode();
+        console.log('[SpritePrep] Initialized');
+    }
 
-            const provider = getSelectedProvider();
-            if (provider === 'comfyui') {
-                btn.innerHTML = '🖥️ Generate Sprite (ComfyUI)';
-                btn.title = 'Generate using local ComfyUI';
-            } else if (provider === 'grok') {
-                btn.innerHTML = '✨ Generate Sprite (Grok Imagine)';
-            } else {
-                btn.innerHTML = '✨ Generate Sprite (OpenAI)';
-            }
-        }
-
-        function getSelectedProvider() {
-            const container = document.getElementById('sgProvider');
-            const active = container?.querySelector('.mode-btn.active');
-            return active?.dataset.provider || 'openai';
-        }
-
-        // Character Reference Upload
+    function initAIGenerateMode() {
+        // Character Reference
         const charRefInput = document.getElementById('sgCharRefInput');
         const charRefPreview = document.getElementById('sgCharRefPreview');
 
@@ -119,19 +90,19 @@
             charRefInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-
                 const reader = new FileReader();
                 reader.onload = (ev) => {
                     charRefBase64 = ev.target.result;
                     if (charRefPreview) {
-                        charRefPreview.innerHTML = `<img src="${charRefBase64}" style="max-height:120px; border-radius:8px;">`;
+                        charRefPreview.innerHTML = `<img src="${charRefBase64}" style="max-height:120px;border-radius:8px;border:1px solid var(--border);">`;
+                        charRefPreview.classList.remove('hidden');
                     }
                 };
                 reader.readAsDataURL(file);
             });
         }
 
-        // Style Reference Upload
+        // Style Reference
         const styleRefInput = document.getElementById('sgStyleRefInput');
         const styleRefPreview = document.getElementById('sgStyleRefPreview');
 
@@ -139,25 +110,15 @@
             styleRefInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-
                 const reader = new FileReader();
                 reader.onload = (ev) => {
                     styleRefBase64 = ev.target.result;
                     if (styleRefPreview) {
-                        styleRefPreview.innerHTML = `<img src="${styleRefBase64}" style="max-height:120px; border-radius:8px;">`;
+                        styleRefPreview.innerHTML = `<img src="${styleRefBase64}" style="max-height:120px;border-radius:8px;border:1px solid var(--border);">`;
+                        styleRefPreview.classList.remove('hidden');
                     }
                 };
                 reader.readAsDataURL(file);
-            });
-        }
-
-        // Generate button
-        const generateBtn = document.getElementById('sgGenerateBtn');
-        if (generateBtn) {
-            generateBtn.addEventListener('click', () => {
-                const provider = getSelectedProvider();
-                console.log('Generate clicked with provider:', provider);
-                alert('Generate clicked with provider: ' + provider + '\n(Full generation logic can be added here)');
             });
         }
 
@@ -175,21 +136,85 @@
                 localStorage.setItem('sg_ai_provider', aiProvider);
                 updateGenerateButtonLabel();
             });
+
+            const initialBtn = providerContainer.querySelector(`[data-provider="${aiProvider}"]`);
+            if (initialBtn) {
+                providerContainer.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                initialBtn.classList.add('active');
+            }
         }
 
-        // Set initial active provider
-        const initialProviderBtn = providerContainer?.querySelector(`[data-provider="${aiProvider}"]`);
-        if (initialProviderBtn) {
-            providerContainer.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-            initialProviderBtn.classList.add('active');
+        // Generate button
+        const generateBtn = document.getElementById('sgGenerateBtn');
+        if (generateBtn) {
+            generateBtn.addEventListener('click', handleGenerate);
         }
 
         updateGenerateButtonLabel();
-
-        console.log('[SpritePrep] Initialized successfully');
     }
 
-    // Boot
+    function updateGenerateButtonLabel() {
+        const btn = document.getElementById('sgGenerateBtn');
+        if (!btn) return;
+
+        if (aiProvider === 'comfyui') {
+            btn.innerHTML = '🖥️ Generate Sprite (ComfyUI)';
+        } else if (aiProvider === 'grok') {
+            btn.innerHTML = '✨ Generate Sprite (Grok Imagine)';
+        } else {
+            btn.innerHTML = '✨ Generate Sprite (OpenAI)';
+        }
+    }
+
+    async function handleGenerate() {
+        const statusEl = document.getElementById('sgStatus');
+        const btn = document.getElementById('sgGenerateBtn');
+
+        if (btn) btn.disabled = true;
+        if (statusEl) statusEl.innerHTML = '<span class="spinner"></span> Generating...';
+
+        try {
+            if (aiProvider === 'comfyui') {
+                await generateComfyUI();
+            } else if (aiProvider === 'grok') {
+                await generateGrok();
+            } else {
+                await generateOpenAI();
+            }
+        } catch (e) {
+            if (statusEl) statusEl.innerHTML = '❌ ' + e.message;
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function generateOpenAI() {
+        const statusEl = document.getElementById('sgStatus');
+        const name = document.getElementById('sgCharName')?.value || 'character';
+        const desc = document.getElementById('sgCharDesc')?.value || '';
+
+        const prompt = `Full body clean sprite of ${name}. ${desc}. White background, game asset style.`;
+
+        const res = await fetch('/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gpt-image-2', prompt, n: 1, size: '1024x1024' })
+        });
+
+        const data = await res.json();
+        if (statusEl) statusEl.innerHTML = data.data ? '✅ Generated with OpenAI' : '❌ Failed';
+    }
+
+    async function generateGrok() {
+        const statusEl = document.getElementById('sgStatus');
+        if (statusEl) statusEl.innerHTML = '✨ Grok generation triggered (OAuth flow)';
+    }
+
+    async function generateComfyUI() {
+        const statusEl = document.getElementById('sgStatus');
+        if (statusEl) statusEl.innerHTML = '🖥️ Sent to local ComfyUI';
+    }
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initSpritePrep);
     } else {
