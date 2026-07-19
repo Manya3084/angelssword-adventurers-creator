@@ -33,7 +33,7 @@
 
     const DEFAULTS = {
         URL: getAutoComfyUIUrl(),
-        CKPT: 'flux1-dev.safetensors',
+        CKPT: 'FLUX.1-dev-fp8.safetensors',
         IPADAPTER: 'ip-adapter-plus-face_sdxl_vit-h.safetensors',
         CLIPVISION: 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
         IP_WEIGHT: 0.55,
@@ -132,7 +132,7 @@
                     <label>Model / UNET</label>
                     <input type="text" id="comfyuiCheckpoint" value="${getSetting('CKPT')}">
                     <div class="text-dim mt-1" style="font-size:0.7rem">
-                        Default: <code>flux1-dev.safetensors</code> (UNET). Names containing "flux" use the Flux workflow.
+                        Default: <code>FLUX.1-dev-fp8.safetensors</code>. Names containing "flux" use the Flux workflow.
                     </div>
                 </div>
 
@@ -142,9 +142,9 @@
                 </div>
 
                 <div class="form-row">
-                    <label>Flux T5</label>
+                    <label>Flux T5 (text encoder)</label>
                     <input type="text" id="comfyuiFluxT5" value="${getSetting('FLUX_T5')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">fp8 recommended on 16GB VRAM (Arc)</div>
+                    <div class="text-dim mt-1" style="font-size:0.7rem">Default: <code>t5xxl_fp8_e4m3fn.safetensors</code> (good for 16GB Arc)</div>
                 </div>
 
                 <div class="form-row">
