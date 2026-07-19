@@ -12,7 +12,8 @@
         LORAS: 'comfyui_loras',
         FLUX_CLIP_L: 'comfyui_flux_clip_l',
         FLUX_T5: 'comfyui_flux_t5',
-        FLUX_VAE: 'comfyui_flux_vae'
+        FLUX_VAE: 'comfyui_flux_vae',
+        UNET_DTYPE: 'comfyui_unet_dtype'
     };
 
     const LORA_PRESETS = {
@@ -31,6 +32,7 @@
         return `http://${host}:8188`;
     }
 
+    // fp8-optimized defaults for Arc 16GB / Flux Dev
     const DEFAULTS = {
         URL: getAutoComfyUIUrl(),
         CKPT: 'FLUX.1-dev-fp8.safetensors',
@@ -38,10 +40,12 @@
         CLIPVISION: 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
         IP_WEIGHT: 0.55,
         CFG: 3.5,
-        STEPS: 28,
+        STEPS: 24,
         FLUX_CLIP_L: 'clip_l.safetensors',
         FLUX_T5: 't5xxl_fp8_e4m3fn.safetensors',
-        FLUX_VAE: 'ae.safetensors'
+        FLUX_VAE: 'ae.safetensors',
+        // auto = pick from filename; fp8_e4m3fn keeps weights in fp8 (saves VRAM)
+        UNET_DTYPE: 'auto'
     };
 
     function getSetting(key) {
@@ -101,6 +105,7 @@
 
     function buildComfyUISettingsHTML() {
         const loras = loadLoras();
+        const dtype = getSetting('UNET_DTYPE');
         let loraRows = '';
         for (let i = 0; i < 3; i++) {
             const L = loras[i] || { name: '', strength: 0.8 };
@@ -115,6 +120,16 @@
                     </div>
                 </div>`;
         }
+
+        const dtypeOpts = [
+            ['auto', 'Auto (fp8 file → fp8_e4m3fn)'],
+            ['fp8_e4m3fn', 'fp8_e4m3fn — keep in fp8 (recommended)'],
+            ['fp8_e4m3fn_fast', 'fp8_e4m3fn_fast — faster kernels if supported'],
+            ['fp8_e5m2', 'fp8_e5m2 — alternate format'],
+            ['default', 'default — may upcast (more VRAM)']
+        ].map(([v, label]) =>
+            `<option value="${v}"${dtype === v ? ' selected' : ''}>${label}</option>`
+        ).join('');
 
         return `
             <div class="glass-panel" id="comfyuiSettingsPanel">
@@ -137,6 +152,15 @@
                 </div>
 
                 <div class="form-row">
+                    <label>UNET weight_dtype (fp8)</label>
+                    <select id="comfyuiUnetDtype">${dtypeOpts}</select>
+                    <div class="text-dim mt-1" style="font-size:0.7rem">
+                        For pre-quantized <code>*fp8*</code> models, <b>fp8_e4m3fn</b> avoids upcasting and saves VRAM on 16GB Arc.
+                        Try <b>fp8_e4m3fn_fast</b> if your ComfyUI build supports it. Use <b>default</b> only if loads fail.
+                    </div>
+                </div>
+
+                <div class="form-row">
                     <label>Flux CLIP-L</label>
                     <input type="text" id="comfyuiFluxClipL" value="${getSetting('FLUX_CLIP_L')}">
                 </div>
@@ -144,7 +168,7 @@
                 <div class="form-row">
                     <label>Flux T5 (text encoder)</label>
                     <input type="text" id="comfyuiFluxT5" value="${getSetting('FLUX_T5')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">Default: <code>t5xxl_fp8_e4m3fn.safetensors</code> (good for 16GB Arc)</div>
+                    <div class="text-dim mt-1" style="font-size:0.7rem">Default: <code>t5xxl_fp8_e4m3fn.safetensors</code> — required for 16GB with Flux</div>
                 </div>
 
                 <div class="form-row">
@@ -170,19 +194,20 @@
                 <div class="form-row">
                     <label>Guidance / CFG <span id="comfyuiCfgValue" class="text-gold">${getSetting('CFG')}</span></label>
                     <input type="range" id="comfyuiCfg" min="1" max="12" step="0.5" value="${getSetting('CFG')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">Flux guidance ~2.5–4.0 · Pony CFG ~4–7</div>
+                    <div class="text-dim mt-1" style="font-size:0.7rem">Flux fp8 sweet spot: <b>3.0–3.5</b> · Pony CFG ~4–7</div>
                 </div>
 
                 <div class="form-row">
                     <label>Steps <span id="comfyuiStepsValue" class="text-gold">${getSetting('STEPS')}</span></label>
                     <input type="range" id="comfyuiSteps" min="10" max="50" step="1" value="${getSetting('STEPS')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">Flux fp8: <b>20–28</b> is enough (default 24)</div>
                 </div>
 
                 <hr class="gold-divider">
 
                 <div class="panel-title" style="font-size:0.95rem"><span class="title-icon">🎨</span> LoRAs</div>
                 <div class="text-dim" style="font-size:0.7rem;margin-bottom:0.5rem">
-                    Files must be in ComfyUI <code>models/loras/</code>. Flux LoRAs require the Flux workflow (model name contains "flux").
+                    Files in <code>models/loras/</code>. Prefer one strong LoRA at 0.7–0.9 on fp8 to limit VRAM spikes.
                 </div>
 
                 <div class="form-row">
@@ -211,6 +236,7 @@
     function wireComfyUISettings() {
         const urlInput = document.getElementById('comfyuiUrl');
         const ckptInput = document.getElementById('comfyuiCheckpoint');
+        const dtypeSelect = document.getElementById('comfyuiUnetDtype');
         const fluxClipL = document.getElementById('comfyuiFluxClipL');
         const fluxT5 = document.getElementById('comfyuiFluxT5');
         const fluxVae = document.getElementById('comfyuiFluxVae');
@@ -312,6 +338,7 @@
         saveBtn.addEventListener('click', () => {
             setSetting('URL', urlInput.value.trim());
             setSetting('CKPT', ckptInput.value.trim());
+            if (dtypeSelect) setSetting('UNET_DTYPE', dtypeSelect.value);
             if (fluxClipL) setSetting('FLUX_CLIP_L', fluxClipL.value.trim());
             if (fluxT5) setSetting('FLUX_T5', fluxT5.value.trim());
             if (fluxVae) setSetting('FLUX_VAE', fluxVae.value.trim());
@@ -433,6 +460,14 @@
             max-height: calc(100vh - 120px); 
             overflow-y: auto; 
             padding-bottom: 40px;
+        }
+        #comfyuiUnetDtype {
+            width: 100%;
+            padding: 0.4rem 0.5rem;
+            border-radius: 6px;
+            border: 1px solid var(--border, #444);
+            background: var(--panel-bg, #1a1a1a);
+            color: inherit;
         }
     `;
     document.head.appendChild(style);
