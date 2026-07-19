@@ -44,6 +44,18 @@
         return `http://${host}:8188`;
     }
 
+    /** Always read live from the UI buttons so it can't get out of sync */
+    function getSelectedGenCount() {
+        const countBox = document.getElementById('sgGenCount');
+        const active = countBox?.querySelector('.gen-count-btn.active');
+        const fromUi = active ? parseInt(active.dataset.count, 10) : NaN;
+        if (!isNaN(fromUi) && fromUi >= 1) {
+            selectedGenCount = fromUi;
+            return Math.min(4, fromUi);
+        }
+        return Math.max(1, Math.min(4, selectedGenCount || 1));
+    }
+
     function getGrokTokenInfo() {
         const manualKey = localStorage.getItem('xai_api_key');
         if (manualKey && manualKey.startsWith('xai-')) {
@@ -122,10 +134,11 @@
                 if (!b) return;
                 countBox.querySelectorAll('.gen-count-btn').forEach(x => x.classList.remove('active'));
                 b.classList.add('active');
-                selectedGenCount = parseInt(b.dataset.count) || 1;
+                selectedGenCount = parseInt(b.dataset.count, 10) || 1;
+                console.log('[SpritePrep] Simultaneous generations set to', selectedGenCount);
             });
             const def = countBox.querySelector('.gen-count-btn.active') || countBox.querySelector('.gen-count-btn');
-            if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
+            if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count, 10) || 1; }
         }
 
         const charIn = document.getElementById('sgCharRefInput');
@@ -306,8 +319,12 @@
         const resultsSection = document.getElementById('sgResultsSection');
         const resultsGrid = document.getElementById('sgResultsGrid');
 
+        // Force-refresh count from UI right when Generate is clicked
+        const count = getSelectedGenCount();
+        console.log('[SpritePrep] Generate clicked — provider:', aiProvider, 'count:', count);
+
         if (btn) btn.disabled = true;
-        if (status) status.innerHTML = '<span class="spinner"></span> Generating...';
+        if (status) status.innerHTML = `<span class="spinner"></span> Starting ${count} generation(s)…`;
         if (resultsSection) resultsSection.classList.add('hidden');
         if (resultsGrid) resultsGrid.innerHTML = '';
         generatedResults = [];
@@ -315,11 +332,11 @@
 
         try {
             if (aiProvider === 'comfyui') {
-                await generateComfyUI(status, resultsGrid);
+                await generateComfyUI(status, resultsGrid, resultsSection, count);
             } else if (aiProvider === 'grok') {
-                await generateGrok(status, resultsGrid);
+                await generateGrok(status, resultsGrid, count);
             } else {
-                await generateOpenAI(status, resultsGrid);
+                await generateOpenAI(status, resultsGrid, count);
             }
 
             if (resultsSection && resultsGrid?.children.length > 0) {
@@ -382,9 +399,10 @@
         }
     }
 
-    async function generateOpenAI(status, grid) {
+    async function generateOpenAI(status, grid, count) {
         const prompt = buildPrompt();
         const hasRef = !!charRefBase64;
+        const n = count || getSelectedGenCount();
 
         let res;
         if (hasRef) {
@@ -394,7 +412,7 @@
                 body: JSON.stringify({
                     model: 'gpt-image-2',
                     prompt: prompt,
-                    n: selectedGenCount,
+                    n: n,
                     size: '1024x1024',
                     images: [charRefBase64]
                 })
@@ -403,7 +421,7 @@
             res = await fetch('/api/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'gpt-image-2', prompt, n: selectedGenCount, size: '1024x1024' })
+                body: JSON.stringify({ model: 'gpt-image-2', prompt, n: n, size: '1024x1024' })
             });
         }
 
@@ -422,11 +440,12 @@
         if (status) status.innerHTML = `✅ Generated ${data.data?.length || 0} sprite(s)`;
     }
 
-    async function generateGrok(status, grid) {
+    async function generateGrok(status, grid, count) {
         const tok = getGrokTokenInfo();
         if (!tok) throw new Error('No SuperGrok token or xAI API key found.');
 
         const prompt = buildPrompt();
+        const n = count || getSelectedGenCount();
         const models = ['grok-imagine-image-quality', 'grok-imagine-image'];
 
         for (const model of models) {
@@ -434,7 +453,7 @@
                 const res = await fetch('/api/xai/images/generations', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tok.value}` },
-                    body: JSON.stringify({ model, prompt, n: selectedGenCount })
+                    body: JSON.stringify({ model, prompt, n: n })
                 });
                 if (!res.ok) {
                     const txt = await res.text();
@@ -452,7 +471,7 @@
                             grid.appendChild(createResultCard(src, i, rd));
                         }
                     });
-                    if (status) status.innerHTML = `✅ Generated with ${model}`;
+                    if (status) status.innerHTML = `✅ Generated ${data.data.length} with ${model}`;
                     return;
                 }
             } catch (e) {
@@ -568,7 +587,7 @@
         if (!pid) throw new Error('No prompt_id from ComfyUI');
 
         if (status) {
-            status.innerHTML = `⏳ Generating ${index + 1}/${total} with ComfyUI…`;
+            status.innerHTML = `⏳ Generating ${index + 1} of ${total} with ComfyUI…`;
         }
 
         for (let i = 0; i < 45; i++) {
@@ -606,23 +625,23 @@
 
                 return { imageSrc: dataUrl, filename: fname };
             } catch (e) {
-                // keep polling
+                // keep polling unless last attempt
             }
         }
 
         throw new Error(`Timed out waiting for generation ${index + 1}`);
     }
 
-    async function generateComfyUI(status, grid) {
+    async function generateComfyUI(status, grid, resultsSection, count) {
         const base = getComfyUIBaseUrl();
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
         const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.65');
         const ipWeight = isNaN(ipWeightRaw) ? 0.65 : ipWeightRaw;
-        const count = Math.max(1, Math.min(4, selectedGenCount || 1));
+        const total = count || getSelectedGenCount();
 
-        console.log('[ComfyUI] base:', base, 'count:', count, 'IP weight:', ipWeight);
+        console.log('[ComfyUI] base:', base, 'total:', total, 'IP weight:', ipWeight);
 
-        if (status) status.innerHTML = '⏳ Preparing ComfyUI workflow…';
+        if (status) status.innerHTML = `⏳ Preparing ${total} ComfyUI generation(s)…`;
 
         let refFilename = null;
         if (charRefBase64) {
@@ -639,27 +658,34 @@
 
         let successCount = 0;
 
-        for (let i = 0; i < count; i++) {
+        for (let i = 0; i < total; i++) {
             const seed = Math.floor(Math.random() * 1e9);
             const { wf, saveNodeId } = buildComfyWorkflow(
                 ckpt, positiveText, negativeText, refFilename, ipWeight, seed
             );
 
             try {
-                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, count);
+                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, total);
                 const rd = { imageSrc: result.imageSrc, index: i, filename: result.filename };
                 generatedResults.push(rd);
                 const card = createResultCard(result.imageSrc, i, rd);
                 if (grid) grid.appendChild(card);
 
+                // Show results panel as soon as the first image arrives
+                if (resultsSection) resultsSection.classList.remove('hidden');
+
                 if (successCount === 0) {
                     selectResult(card, rd);
                 }
                 successCount++;
+
+                if (status) {
+                    status.innerHTML = `✅ ${successCount}/${total} done — continuing…`;
+                }
             } catch (e) {
                 console.error(`[ComfyUI] Generation ${i + 1} failed:`, e);
                 if (status) {
-                    status.innerHTML = `⚠️ Gen ${i + 1}/${count} failed: ${e.message}`;
+                    status.innerHTML = `⚠️ Gen ${i + 1}/${total} failed: ${e.message} — trying next…`;
                 }
             }
         }
@@ -669,7 +695,7 @@
         }
 
         if (status) {
-            status.innerHTML = `✅ Generated ${successCount}/${count} sprite(s) with ComfyUI`;
+            status.innerHTML = `✅ Generated ${successCount}/${total} sprite(s) with ComfyUI`;
         }
     }
 
