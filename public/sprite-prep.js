@@ -10,6 +10,7 @@
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
     let generatedResults = [];
     let currentSelectedResult = null;
+    let serverComfyUrl = null; // filled from /api/config
 
     const DEFAULTS = {
         name: 'Mirrime the Mage',
@@ -17,15 +18,31 @@
         action: 'standing pose, confident expression'
     };
 
+    // Load server-side config once
+    (async function loadServerConfig() {
+        try {
+            const r = await fetch('/api/config');
+            if (r.ok) {
+                const cfg = await r.json();
+                if (cfg.comfyuiUrl) serverComfyUrl = cfg.comfyuiUrl;
+                console.log('[Config] Server ComfyUI URL:', serverComfyUrl);
+            }
+        } catch (e) {
+            console.warn('[Config] Could not load /api/config', e);
+        }
+    })();
+
     /**
-     * Resolve ComfyUI base URL.
-     * - If user saved a URL in Settings → use that
-     * - If page is opened on localhost → http://127.0.0.1:8188
-     * - If page is opened remotely → http://<same-hostname>:8188
+     * Priority:
+     * 1. User-saved value in localStorage (Settings)
+     * 2. Server environment variable (COMFYUI_URL via /api/config)
+     * 3. Auto-detect from current page hostname
      */
     function getComfyUIBaseUrl() {
         const saved = (localStorage.getItem('comfyui_base_url') || '').trim();
-        if (saved) return saved;
+        if (saved) return saved.replace(/\/$/, '');
+
+        if (serverComfyUrl) return serverComfyUrl.replace(/\/$/, '');
 
         const host = window.location.hostname;
         if (!host || host === 'localhost' || host === '127.0.0.1') {
@@ -118,7 +135,6 @@
             if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count) || 1; }
         }
 
-        // Character Reference
         const charIn = document.getElementById('sgCharRefInput');
         const charPrev = document.getElementById('sgCharRefPreview');
         if (charIn) {
@@ -137,7 +153,6 @@
             });
         }
 
-        // Style Reference
         const styleIn = document.getElementById('sgStyleRefInput');
         const stylePrev = document.getElementById('sgStyleRefPreview');
         if (styleIn) {
@@ -479,26 +494,10 @@
 
         if (refFilename) {
             wf = {
-                "1": {
-                    "class_type": "CheckpointLoaderSimple",
-                    "inputs": { "ckpt_name": ckpt }
-                },
-                "2": {
-                    "class_type": "LoadImage",
-                    "inputs": { "image": refFilename }
-                },
-                "3": {
-                    "class_type": "IPAdapterModelLoader",
-                    "inputs": {
-                        "ipadapter_file": "ip-adapter-plus-face_sdxl_vit-h.safetensors"
-                    }
-                },
-                "4": {
-                    "class_type": "CLIPVisionLoader",
-                    "inputs": {
-                        "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
-                    }
-                },
+                "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
+                "2": { "class_type": "LoadImage", "inputs": { "image": refFilename } },
+                "3": { "class_type": "IPAdapterModelLoader", "inputs": { "ipadapter_file": "ip-adapter-plus-face_sdxl_vit-h.safetensors" } },
+                "4": { "class_type": "CLIPVisionLoader", "inputs": { "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" } },
                 "5": {
                     "class_type": "IPAdapterAdvanced",
                     "inputs": {
@@ -514,18 +513,9 @@
                         "embeds_scaling": "V only"
                     }
                 },
-                "6": {
-                    "class_type": "CLIPTextEncode",
-                    "inputs": { "text": positiveText, "clip": ["1", 1] }
-                },
-                "7": {
-                    "class_type": "CLIPTextEncode",
-                    "inputs": { "text": negativeText, "clip": ["1", 1] }
-                },
-                "8": {
-                    "class_type": "EmptyLatentImage",
-                    "inputs": { "width": 1216, "height": 832, "batch_size": 1 }
-                },
+                "6": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
+                "7": { "class_type": "CLIPTextEncode", "inputs": { "text": negativeText, "clip": ["1", 1] } },
+                "8": { "class_type": "EmptyLatentImage", "inputs": { "width": 1216, "height": 832, "batch_size": 1 } },
                 "9": {
                     "class_type": "KSampler",
                     "inputs": {
@@ -541,14 +531,8 @@
                         "latent_image": ["8", 0]
                     }
                 },
-                "10": {
-                    "class_type": "VAEDecode",
-                    "inputs": { "samples": ["9", 0], "vae": ["1", 2] }
-                },
-                "11": {
-                    "class_type": "SaveImage",
-                    "inputs": { "filename_prefix": "as_adventurer", "images": ["10", 0] }
-                }
+                "10": { "class_type": "VAEDecode", "inputs": { "samples": ["9", 0], "vae": ["1", 2] } },
+                "11": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["10", 0] } }
             };
             saveNodeId = "11";
         } else {
