@@ -44,6 +44,21 @@
         return /flux/i.test(name || '');
     }
 
+    /**
+     * Resolve UNETLoader weight_dtype for fp8 quantization.
+     * Pre-quantized *fp8* checkpoints should stay in fp8_e4m3fn to avoid
+     * upcasting to bf16/fp16 (which blows past 16GB on Arc).
+     */
+    function resolveUnetDtype(unetName) {
+        const pref = (localStorage.getItem('comfyui_unet_dtype') || 'auto').trim();
+        if (pref && pref !== 'auto') return pref;
+
+        const n = unetName || '';
+        if (/fp8_e5m2/i.test(n)) return 'fp8_e5m2';
+        if (/fp8/i.test(n)) return 'fp8_e4m3fn';
+        return 'default';
+    }
+
     function getSelectedGenCount() {
         const countBox = document.getElementById('sgGenCount');
         const active = countBox?.querySelector('.gen-count-btn.active');
@@ -491,13 +506,13 @@
 
     function buildFluxWorkflow(opts) {
         const {
-            unetName, clipL, t5, vaeName, positiveText, seed, steps, guidance, loras
+            unetName, clipL, t5, vaeName, positiveText, seed, steps, guidance, loras, weightDtype
         } = opts;
 
         const wf = {};
         let nextId = 1;
 
-        const dtype = /fp8/i.test(unetName || '') ? 'fp8_e4m3fn' : 'default';
+        const dtype = weightDtype || resolveUnetDtype(unetName);
 
         const unetId = String(nextId++);
         wf[unetId] = {
@@ -505,6 +520,7 @@
             inputs: { unet_name: unetName, weight_dtype: dtype }
         };
 
+        // DualCLIP: CLIP-L + T5. Prefer fp8 T5 file so encoder stays memory-light.
         const dualId = String(nextId++);
         wf[dualId] = {
             class_type: 'DualCLIPLoader',
@@ -535,6 +551,7 @@
             inputs: { text: positiveText, clip: [dualId, 0] }
         };
 
+        // Flux: empty negative; guidance handled by FluxGuidance
         const negId = String(nextId++);
         wf[negId] = {
             class_type: 'CLIPTextEncode',
@@ -547,6 +564,7 @@
             inputs: { guidance: guidance, conditioning: [posId, 0] }
         };
 
+        // 1024² is the fp8-safe default on 16GB; avoid larger unless needed
         const latentId = String(nextId++);
         wf[latentId] = {
             class_type: 'EmptySD3LatentImage',
@@ -582,6 +600,7 @@
             inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] }
         };
 
+        console.log('[ComfyUI Flux] UNET dtype:', dtype, 'steps:', steps, 'guidance:', guidance);
         return { wf, saveNodeId: saveId };
     }
 
@@ -755,6 +774,7 @@
         const base = getComfyUIBaseUrl();
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'FLUX.1-dev-fp8.safetensors';
         const useFlux = isFluxModel(ckpt);
+        const weightDtype = resolveUnetDtype(ckpt);
 
         const ipAdapterFile = localStorage.getItem('comfyui_ipadapter_model') || 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
         const clipVisionFile = localStorage.getItem('comfyui_clip_vision_model') || 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors';
@@ -764,15 +784,17 @@
 
         const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.55');
         const ipWeight = isNaN(ipWeightRaw) ? 0.55 : ipWeightRaw;
+        // Flux fp8: guidance 3.5 default; steps 24 default
         const cfgRaw = parseFloat(localStorage.getItem('comfyui_cfg') || (useFlux ? '3.5' : '5'));
         const cfg = isNaN(cfgRaw) ? (useFlux ? 3.5 : 5.0) : Math.max(1, Math.min(12, cfgRaw));
-        const stepsRaw = parseInt(localStorage.getItem('comfyui_steps') || '28', 10);
-        const steps = isNaN(stepsRaw) ? 28 : Math.max(10, Math.min(50, stepsRaw));
+        const stepsRaw = parseInt(localStorage.getItem('comfyui_steps') || (useFlux ? '24' : '28'), 10);
+        const steps = isNaN(stepsRaw) ? (useFlux ? 24 : 28) : Math.max(10, Math.min(50, stepsRaw));
 
         const loras = getActiveLoras();
         const total = count || getSelectedGenCount();
 
-        console.log('[ComfyUI] mode:', useFlux ? 'FLUX' : 'SDXL/Pony', 'model:', ckpt, 'T5:', fluxT5, 'loras:', loras);
+        console.log('[ComfyUI] mode:', useFlux ? 'FLUX' : 'SDXL/Pony',
+            'model:', ckpt, 'dtype:', weightDtype, 'T5:', fluxT5, 'steps:', steps, 'guidance:', cfg, 'loras:', loras);
 
         let refFilename = null;
         if (!useFlux && charRefBase64) {
@@ -790,7 +812,7 @@
         const positiveText = buildComfyPrompt(useFlux);
         const negativeText = buildComfyNegative();
         let successCount = 0;
-        const tagParts = [useFlux ? 'Flux' : 'Pony'];
+        const tagParts = [useFlux ? 'Flux/' + weightDtype : 'Pony'];
         if (loras.length) tagParts.push(loras.length + ' LoRA');
         if (refFilename) tagParts.push('IP-Adapter');
         const tag = tagParts.join(' · ');
@@ -803,6 +825,7 @@
                 useFlux,
                 ckpt,
                 unetName: ckpt,
+                weightDtype,
                 clipL: fluxClipL,
                 t5: fluxT5,
                 vaeName: fluxVae,
