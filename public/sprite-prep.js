@@ -16,6 +16,7 @@
     const FLUX_DEFAULT_T5 = 't5/t5xxl_fp8_e4m3fn.safetensors';
     const FLUX_DEFAULT_CLIP_L = 'clip_l.safetensors';
     const FLUX_DEFAULT_VAE = 'ae.safetensors';
+    const FLUX_DEFAULT_PULID = 'pulid_flux_v0.9.1.safetensors';
 
     const DEFAULTS = {
         name: 'Mirrime the Mage',
@@ -361,6 +362,8 @@
                 `game asset style, character design, sharp focus, highly detailed, anime style`;
             if (selectedRaceMode === 'kanolith') p += ', animal features, furry';
             if (selectedRaceMode === 'zoalith') p += ', dragon features, scales';
+            // Style ref is not wired as an image model on Flux; nudge via prompt only
+            if (styleRefBase64) p += ', consistent art style, cohesive design';
             return p;
         }
 
@@ -553,7 +556,6 @@
         const card = createResultCard(imageSrc, index, rd, total);
         grid.appendChild(card);
         if (section) section.classList.remove('hidden');
-        // Select first result by default; later ones stay available to click
         if (index === 0 || !currentSelectedResult) selectResult(card, rd);
         console.log('[Results] appended card', index + 1, 'of', total, '— grid children:', grid.children.length);
         return rd;
@@ -628,14 +630,23 @@
         return data.name || data.filename || filename;
     }
 
+    /**
+     * Flux workflow with optional PuLID-Flux identity injection.
+     * Requires custom nodes: balazik/ComfyUI-PuLID-Flux or lldacing/ComfyUI_PuLID_Flux_ll
+     * Models:
+     *   models/pulid/pulid_flux_v0.9.1.safetensors
+     *   models/insightface/models/antelopev2/*
+     *   EVA-CLIP auto-downloaded by the node pack
+     */
     function buildFluxWorkflow(opts) {
         const {
-            unetName, clipL, t5, vaeName, positiveText, seed, steps, guidance, loras, weightDtype
+            unetName, clipL, t5, vaeName, positiveText, seed, steps, guidance,
+            loras, weightDtype, refFilename,
+            pulidFile, pulidWeight, pulidStart, pulidEnd, insightfaceProvider
         } = opts;
 
         const wf = {};
         let nextId = 1;
-
         const dtype = weightDtype || resolveUnetDtype(unetName);
 
         const unetId = String(nextId++);
@@ -653,6 +664,7 @@
         const vaeId = String(nextId++);
         wf[vaeId] = { class_type: 'VAELoader', inputs: { vae_name: vaeName } };
 
+        // LoRAs first, then PuLID on the resulting model
         let modelRef = [unetId, 0];
         const activeLoras = Array.isArray(loras) ? loras : [];
         for (const L of activeLoras) {
@@ -666,6 +678,49 @@
                 }
             };
             modelRef = [id, 0];
+        }
+
+        // PuLID-Flux identity from character reference image
+        if (refFilename) {
+            const loadImgId = String(nextId++);
+            const pulidModelId = String(nextId++);
+            const evaId = String(nextId++);
+            const faceId = String(nextId++);
+            const applyId = String(nextId++);
+
+            wf[loadImgId] = {
+                class_type: 'LoadImage',
+                inputs: { image: refFilename }
+            };
+            wf[pulidModelId] = {
+                class_type: 'PulidFluxModelLoader',
+                inputs: { pulid_file: pulidFile || FLUX_DEFAULT_PULID }
+            };
+            wf[evaId] = {
+                class_type: 'PulidFluxEvaClipLoader',
+                inputs: {}
+            };
+            // Intel Arc / no NVIDIA → CPU. CUDA only if user has NVIDIA.
+            wf[faceId] = {
+                class_type: 'PulidFluxInsightFaceLoader',
+                inputs: { provider: insightfaceProvider || 'CPU' }
+            };
+            wf[applyId] = {
+                class_type: 'ApplyPulidFlux',
+                inputs: {
+                    model: modelRef,
+                    pulid_flux: [pulidModelId, 0],
+                    eva_clip: [evaId, 0],
+                    face_analysis: [faceId, 0],
+                    image: [loadImgId, 0],
+                    weight: typeof pulidWeight === 'number' ? pulidWeight : 0.9,
+                    start_at: typeof pulidStart === 'number' ? pulidStart : 0.0,
+                    end_at: typeof pulidEnd === 'number' ? pulidEnd : 1.0
+                }
+            };
+            modelRef = [applyId, 0];
+            console.log('[ComfyUI Flux] PuLID enabled — file:', pulidFile || FLUX_DEFAULT_PULID,
+                'weight:', pulidWeight, 'provider:', insightfaceProvider || 'CPU');
         }
 
         const posId = String(nextId++);
@@ -841,7 +896,6 @@
         return buildSdxlWorkflow(opts);
     }
 
-    /** Find any image outputs in a history entry (not only the Save node id). */
     function extractHistoryImages(entry, preferredNodeId) {
         if (!entry || !entry.outputs) return [];
         const outs = entry.outputs;
@@ -850,7 +904,6 @@
         if (preferredNodeId != null && outs[preferredNodeId]?.images?.length) {
             return outs[preferredNodeId].images.filter(im => im && im.filename);
         }
-        // Also try string/number key variants
         const keys = Object.keys(outs);
         for (const k of keys) {
             const imgs = outs[k]?.images;
@@ -945,6 +998,11 @@
         const fluxT5 = localStorage.getItem('comfyui_flux_t5') || FLUX_DEFAULT_T5;
         const fluxVae = localStorage.getItem('comfyui_flux_vae') || FLUX_DEFAULT_VAE;
 
+        const pulidFile = localStorage.getItem('comfyui_pulid_file') || FLUX_DEFAULT_PULID;
+        const pulidWeightRaw = parseFloat(localStorage.getItem('comfyui_pulid_weight') || '0.9');
+        const pulidWeight = isNaN(pulidWeightRaw) ? 0.9 : Math.max(-1, Math.min(5, pulidWeightRaw));
+        const insightfaceProvider = (localStorage.getItem('comfyui_insightface_provider') || 'CPU').trim() || 'CPU';
+
         const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.55');
         const ipWeight = isNaN(ipWeightRaw) ? 0.55 : ipWeightRaw;
         const cfgRaw = parseFloat(localStorage.getItem('comfyui_cfg') || (useFlux ? '3.5' : '5'));
@@ -956,19 +1014,27 @@
         const total = count || getSelectedGenCount();
 
         console.log('[ComfyUI] mode:', useFlux ? 'FLUX' : 'SDXL/Pony',
-            'model:', ckpt, 'gens:', total, 'CLIP-L:', fluxClipL, 'T5:', fluxT5);
+            'model:', ckpt, 'gens:', total, 'CLIP-L:', fluxClipL, 'T5:', fluxT5,
+            'PuLID:', useFlux && charRefBase64 ? pulidFile + '@' + pulidWeight : 'off');
 
         let refFilename = null;
-        if (!useFlux && charRefBase64) {
+        if (charRefBase64) {
             try {
-                if (status) status.innerHTML = '⏳ Preparing square IP-Adapter reference…';
+                if (status) {
+                    status.innerHTML = useFlux
+                        ? '⏳ Preparing face reference for PuLID-Flux…'
+                        : '⏳ Preparing square IP-Adapter reference…';
+                }
+                // Face-centered square crop helps both IP-Adapter and PuLID
                 const squaredRef = await squareCropForIPAdapter(charRefBase64, 1024);
                 refFilename = await uploadImageToComfy(base, squaredRef, `as_char_ref_${Date.now()}.png`);
             } catch (e) {
                 throw new Error('Character reference failed: ' + e.message);
             }
-        } else if (useFlux && charRefBase64) {
-            console.warn('[ComfyUI] Character reference ignored on Flux path');
+        }
+
+        if (useFlux && styleRefBase64) {
+            console.warn('[ComfyUI] Style reference is prompt-only on Flux (no style image encoder wired yet)');
         }
 
         const positiveText = buildComfyPrompt(useFlux);
@@ -976,12 +1042,11 @@
         let successCount = 0;
         const tagParts = [useFlux ? 'Flux/' + weightDtype : 'Pony'];
         if (loras.length) tagParts.push(loras.length + ' LoRA');
-        if (refFilename) tagParts.push('IP-Adapter');
+        if (refFilename) tagParts.push(useFlux ? 'PuLID' : 'IP-Adapter');
         const tag = tagParts.join(' · ');
 
         if (status) status.innerHTML = `⏳ ${tag} — starting ${total} gen(s)…`;
 
-        // Show results panel early so cards appear as they finish
         const section = document.getElementById('sgResultsSection');
         if (section) section.classList.remove('hidden');
 
@@ -1005,7 +1070,12 @@
                 guidance: cfg,
                 ipAdapterFile,
                 clipVisionFile,
-                loras
+                loras,
+                pulidFile,
+                pulidWeight,
+                pulidStart: 0.0,
+                pulidEnd: 1.0,
+                insightfaceProvider
             });
 
             try {
