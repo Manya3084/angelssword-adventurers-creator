@@ -10,6 +10,13 @@ const PORT = process.env.PORT || 3001;
 // Server-side default for ComfyUI (set in docker-compose / env)
 const COMFYUI_URL = (process.env.COMFYUI_URL || 'http://127.0.0.1:8188').replace(/\/$/, '');
 
+// Command used by the "Restart ComfyUI" button
+// Examples:
+//   COMFYUI_RESTART_CMD="docker restart comfyui"
+//   COMFYUI_RESTART_CMD="systemctl restart comfyui"
+//   COMFYUI_RESTART_CMD="/path/to/restart-comfyui.sh"
+const COMFYUI_RESTART_CMD = process.env.COMFYUI_RESTART_CMD || '';
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -30,6 +37,7 @@ app.use(express.static(path.join(APP_DIR, 'public')));
 app.get('/api/config', (req, res) => {
     res.json({
         comfyuiUrl: COMFYUI_URL,
+        comfyuiRestartAvailable: !!COMFYUI_RESTART_CMD,
         port: PORT
     });
 });
@@ -275,6 +283,34 @@ app.post('/api/comfyui/test', async (req, res) => {
     }
 });
 
+// Restart ComfyUI (command comes from COMFYUI_RESTART_CMD env var)
+app.post('/api/comfyui/restart', (req, res) => {
+    if (!COMFYUI_RESTART_CMD) {
+        return res.status(400).json({
+            error: 'Restart not configured. Set COMFYUI_RESTART_CMD in docker-compose / environment.'
+        });
+    }
+
+    console.log('[ComfyUI] Restart requested →', COMFYUI_RESTART_CMD);
+
+    exec(COMFYUI_RESTART_CMD, { timeout: 60000 }, (err, stdout, stderr) => {
+        if (err) {
+            console.error('[ComfyUI] Restart failed:', err.message, stderr);
+            return res.status(500).json({
+                error: err.message,
+                stderr: (stderr || '').substring(0, 500)
+            });
+        }
+
+        console.log('[ComfyUI] Restart OK:', (stdout || '').substring(0, 200));
+        res.json({
+            ok: true,
+            message: 'ComfyUI restart command executed',
+            stdout: (stdout || '').substring(0, 300)
+        });
+    });
+});
+
 app.post('/api/comfyui/proxy', async (req, res) => {
     try {
         const { baseUrl, path: reqPath, method, body, isBinary } = req.body || {};
@@ -342,4 +378,9 @@ app.post('/api/comfyui/upload', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`AS Adventurer running on port ${PORT}`);
     console.log(`ComfyUI default URL: ${COMFYUI_URL}`);
+    if (COMFYUI_RESTART_CMD) {
+        console.log(`ComfyUI restart command: ${COMFYUI_RESTART_CMD}`);
+    } else {
+        console.log('ComfyUI restart: not configured (set COMFYUI_RESTART_CMD)');
+    }
 });
