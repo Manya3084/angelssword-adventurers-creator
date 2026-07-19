@@ -24,6 +24,22 @@
         action: 'standing pose, confident expression'
     };
 
+    /** Same completion feedback as video-gen: sound + optional system notification + toast */
+    function notifyGenerationComplete(message) {
+        try {
+            window.notificationSound?.play();
+        } catch (e) {
+            console.warn('[SpritePrep] notification sound failed', e);
+        }
+        try {
+            if (typeof window.showToast === 'function') {
+                window.showToast(message || 'Generation complete', 'success');
+            }
+        } catch (e) {
+            console.warn('[SpritePrep] toast failed', e);
+        }
+    }
+
     (async function loadServerConfig() {
         try {
             const r = await fetch('/api/config');
@@ -362,7 +378,6 @@
                 `game asset style, character design, sharp focus, highly detailed, anime style`;
             if (selectedRaceMode === 'kanolith') p += ', animal features, furry';
             if (selectedRaceMode === 'zoalith') p += ', dragon features, scales';
-            // Style ref is not wired as an image model on Flux; nudge via prompt only
             if (styleRefBase64) p += ', consistent art style, cohesive design';
             return p;
         }
@@ -463,8 +478,22 @@
             }
             console.log('[Results] cards in grid:', gridNow ? gridNow.children.length : 0,
                 'generatedResults:', generatedResults.length);
+
+            // Match video-gen: sound + system notification (if tab hidden) + toast
+            if (generatedResults.length > 0) {
+                const providerLabel = aiProvider === 'comfyui' ? 'ComfyUI'
+                    : aiProvider === 'grok' ? 'Grok' : 'OpenAI';
+                notifyGenerationComplete(
+                    `✅ Generated ${generatedResults.length} sprite(s) with ${providerLabel}`
+                );
+            }
         } catch (e) {
             if (status) { status.innerHTML = '❌ ' + e.message; status.style.color = 'var(--red, red)'; }
+            try {
+                if (typeof window.showToast === 'function') {
+                    window.showToast(e.message || 'Generation failed', 'error');
+                }
+            } catch (_) { /* ignore */ }
         } finally {
             if (btn) btn.disabled = false;
         }
@@ -630,14 +659,6 @@
         return data.name || data.filename || filename;
     }
 
-    /**
-     * Flux workflow with optional PuLID-Flux identity injection.
-     * Requires custom nodes: balazik/ComfyUI-PuLID-Flux or lldacing/ComfyUI_PuLID_Flux_ll
-     * Models:
-     *   models/pulid/pulid_flux_v0.9.1.safetensors
-     *   models/insightface/models/antelopev2/*
-     *   EVA-CLIP auto-downloaded by the node pack
-     */
     function buildFluxWorkflow(opts) {
         const {
             unetName, clipL, t5, vaeName, positiveText, seed, steps, guidance,
@@ -664,7 +685,6 @@
         const vaeId = String(nextId++);
         wf[vaeId] = { class_type: 'VAELoader', inputs: { vae_name: vaeName } };
 
-        // LoRAs first, then PuLID on the resulting model
         let modelRef = [unetId, 0];
         const activeLoras = Array.isArray(loras) ? loras : [];
         for (const L of activeLoras) {
@@ -680,7 +700,6 @@
             modelRef = [id, 0];
         }
 
-        // PuLID-Flux identity from character reference image
         if (refFilename) {
             const loadImgId = String(nextId++);
             const pulidModelId = String(nextId++);
@@ -700,7 +719,6 @@
                 class_type: 'PulidFluxEvaClipLoader',
                 inputs: {}
             };
-            // Intel Arc / no NVIDIA → CPU. CUDA only if user has NVIDIA.
             wf[faceId] = {
                 class_type: 'PulidFluxInsightFaceLoader',
                 inputs: { provider: insightfaceProvider || 'CPU' }
@@ -1025,7 +1043,6 @@
                         ? '⏳ Preparing face reference for PuLID-Flux…'
                         : '⏳ Preparing square IP-Adapter reference…';
                 }
-                // Face-centered square crop helps both IP-Adapter and PuLID
                 const squaredRef = await squareCropForIPAdapter(charRefBase64, 1024);
                 refFilename = await uploadImageToComfy(base, squaredRef, `as_char_ref_${Date.now()}.png`);
             } catch (e) {
