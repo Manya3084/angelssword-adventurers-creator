@@ -17,6 +17,23 @@
         action: 'standing pose, confident expression'
     };
 
+    /**
+     * Resolve ComfyUI base URL.
+     * - If user saved a URL in Settings → use that
+     * - If page is opened on localhost → http://127.0.0.1:8188
+     * - If page is opened remotely → http://<same-hostname>:8188
+     */
+    function getComfyUIBaseUrl() {
+        const saved = (localStorage.getItem('comfyui_base_url') || '').trim();
+        if (saved) return saved;
+
+        const host = window.location.hostname;
+        if (!host || host === 'localhost' || host === '127.0.0.1') {
+            return 'http://127.0.0.1:8188';
+        }
+        return `http://${host}:8188`;
+    }
+
     function getGrokTokenInfo() {
         const manualKey = localStorage.getItem('xai_api_key');
         if (manualKey && manualKey.startsWith('xai-')) {
@@ -247,14 +264,11 @@
             return;
         }
 
-        // Make sure the global handoff object exists
         if (!window.ASAdventurer) window.ASAdventurer = {};
         if (!window.ASAdventurer.handoff) window.ASAdventurer.handoff = {};
 
-        // This is what video-gen.js looks for
         window.ASAdventurer.handoff.spriteBase64 = currentSelectedResult.imageSrc;
 
-        // Switch to the Video Gen tab
         const tabBar = document.getElementById('tabBar');
         if (tabBar) {
             const vtab = tabBar.querySelector('[data-tab="tab-video-gen"]');
@@ -440,8 +454,10 @@
     }
 
     async function generateComfyUI(status, grid) {
-        const base = localStorage.getItem('comfyui_base_url') || 'http://127.0.0.1:8188';
+        const base = getComfyUIBaseUrl();
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
+
+        console.log('[ComfyUI] Using base URL:', base);
 
         if (status) status.innerHTML = '⏳ Preparing IP-Adapter + Pony workflow...';
 
@@ -462,7 +478,6 @@
         let saveNodeId;
 
         if (refFilename) {
-            // IP-Adapter workflow using the model that actually exists on this machine
             wf = {
                 "1": {
                     "class_type": "CheckpointLoaderSimple",
@@ -475,7 +490,6 @@
                 "3": {
                     "class_type": "IPAdapterModelLoader",
                     "inputs": {
-                        // This is the SDXL model that exists on the user's system
                         "ipadapter_file": "ip-adapter-plus-face_sdxl_vit-h.safetensors"
                     }
                 },
@@ -538,7 +552,6 @@
             };
             saveNodeId = "11";
         } else {
-            // Fallback text-only
             wf = {
                 "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
                 "2": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
