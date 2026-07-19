@@ -69,11 +69,9 @@ app.post('/api/xai/oauth/token', async (req, res) => {
     }
 });
 
-// Test Grok / xAI connection (used by Settings "Test Connection")
+// Test Grok / xAI connection
 app.post('/api/xai/test', async (req, res) => {
     try {
-        // Simple test - just return success if the proxy is running.
-        // A more advanced version could validate the token by calling /v1/models
         res.json({ ok: true, message: 'Grok proxy is reachable' });
     } catch (err) {
         res.status(502).json({ error: err.message });
@@ -151,10 +149,80 @@ app.post('/api/xai/images/generations', async (req, res) => {
     if (!auth) return res.status(401).json({ error: 'No xAI key' });
     try {
         const r = await fetch(`${XAI_API_BASE}/images/generations`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify(req.body)
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: auth },
+            body: JSON.stringify(req.body)
         });
         res.status(r.status).type('application/json').send(await r.text());
     } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// ============================================
+// xAI / Grok Video
+// ============================================
+
+// Start a video generation job
+app.post('/api/xai/videos/generations', async (req, res) => {
+    const auth = req.headers['authorization'] || (process.env.XAI_API_KEY ? `Bearer ${process.env.XAI_API_KEY}` : null);
+    if (!auth) return res.status(401).json({ error: 'No xAI key' });
+
+    try {
+        const r = await fetch(`${XAI_API_BASE}/videos/generations`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': auth
+            },
+            body: JSON.stringify(req.body)
+        });
+        res.status(r.status).type('application/json').send(await r.text());
+    } catch (e) {
+        res.status(502).json({ error: e.message });
+    }
+});
+
+// Poll video generation status
+app.get('/api/xai/videos/:id', async (req, res) => {
+    const auth = req.headers['authorization'] || (process.env.XAI_API_KEY ? `Bearer ${process.env.XAI_API_KEY}` : null);
+    if (!auth) return res.status(401).json({ error: 'No xAI key' });
+
+    try {
+        const r = await fetch(`${XAI_API_BASE}/videos/${encodeURIComponent(req.params.id)}`, {
+            method: 'GET',
+            headers: { 'Authorization': auth }
+        });
+        res.status(r.status).type('application/json').send(await r.text());
+    } catch (e) {
+        res.status(502).json({ error: e.message });
+    }
+});
+
+// Download a finished video (proxy to avoid CORS)
+app.post('/api/xai/video-fetch', async (req, res) => {
+    const auth = req.headers['authorization'] || (process.env.XAI_API_KEY ? `Bearer ${process.env.XAI_API_KEY}` : null);
+    const { url } = req.body || {};
+
+    if (!url) return res.status(400).json({ error: 'Missing url' });
+
+    try {
+        const headers = {};
+        if (auth) headers['Authorization'] = auth;
+
+        const r = await fetch(url, { headers });
+        if (!r.ok) {
+            return res.status(r.status).json({ error: `Failed to fetch video: ${r.status}` });
+        }
+
+        const contentType = r.headers.get('content-type') || 'video/mp4';
+        const buffer = await r.buffer();
+
+        res.status(200)
+            .set('Content-Type', contentType)
+            .set('Content-Length', buffer.length)
+            .send(buffer);
+    } catch (e) {
+        res.status(502).json({ error: e.message });
+    }
 });
 
 // ============================================
