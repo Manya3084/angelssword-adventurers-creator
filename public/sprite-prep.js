@@ -497,10 +497,12 @@
         const wf = {};
         let nextId = 1;
 
+        const dtype = /fp8/i.test(unetName || '') ? 'fp8_e4m3fn' : 'default';
+
         const unetId = String(nextId++);
         wf[unetId] = {
             class_type: 'UNETLoader',
-            inputs: { unet_name: unetName, weight_dtype: 'default' }
+            inputs: { unet_name: unetName, weight_dtype: dtype }
         };
 
         const dualId = String(nextId++);
@@ -516,7 +518,6 @@
         const activeLoras = Array.isArray(loras) ? loras : [];
         for (const L of activeLoras) {
             const id = String(nextId++);
-            // Model-only LoRA is the usual path for Flux
             wf[id] = {
                 class_type: 'LoraLoaderModelOnly',
                 inputs: {
@@ -752,7 +753,7 @@
 
     async function generateComfyUI(status, grid, resultsSection, count) {
         const base = getComfyUIBaseUrl();
-        const ckpt = localStorage.getItem('comfyui_checkpoint') || 'flux1-dev.safetensors';
+        const ckpt = localStorage.getItem('comfyui_checkpoint') || 'FLUX.1-dev-fp8.safetensors';
         const useFlux = isFluxModel(ckpt);
 
         const ipAdapterFile = localStorage.getItem('comfyui_ipadapter_model') || 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
@@ -771,9 +772,8 @@
         const loras = getActiveLoras();
         const total = count || getSelectedGenCount();
 
-        console.log('[ComfyUI] mode:', useFlux ? 'FLUX' : 'SDXL/Pony', 'model:', ckpt, 'loras:', loras);
+        console.log('[ComfyUI] mode:', useFlux ? 'FLUX' : 'SDXL/Pony', 'model:', ckpt, 'T5:', fluxT5, 'loras:', loras);
 
-        // IP-Adapter currently only wired for SDXL/Pony path
         let refFilename = null;
         if (!useFlux && charRefBase64) {
             try {
