@@ -73,6 +73,42 @@
         return null;
     }
 
+    /**
+     * Center-crop to square and resize for IP-Adapter / CLIP vision.
+     * Avoids ComfyUI's "not a square" warning and keeps the subject centered.
+     */
+    function squareCropForIPAdapter(dataUrl, outSize) {
+        outSize = outSize || 1024;
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                try {
+                    const w = img.naturalWidth || img.width;
+                    const h = img.naturalHeight || img.height;
+                    const side = Math.min(w, h);
+                    const sx = Math.floor((w - side) / 2);
+                    const sy = Math.floor((h - side) / 2);
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = outSize;
+                    canvas.height = outSize;
+                    const ctx = canvas.getContext('2d');
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = 'high';
+                    ctx.drawImage(img, sx, sy, side, side, 0, 0, outSize, outSize);
+
+                    const result = canvas.toDataURL('image/png');
+                    console.log('[ComfyUI] Squared IP-Adapter ref:', w + 'x' + h, '→', outSize + 'x' + outSize, '(center crop)');
+                    resolve(result);
+                } catch (e) {
+                    reject(e);
+                }
+            };
+            img.onerror = () => reject(new Error('Failed to load reference image for square crop'));
+            img.src = dataUrl;
+        });
+    }
+
     function initSpritePrep() {
         const modeSelector = document.getElementById('spritePrepMode');
         const manualMode = document.getElementById('spriteManualMode');
@@ -652,10 +688,12 @@
         let refFilename = null;
         if (charRefBase64) {
             try {
-                refFilename = await uploadImageToComfy(base, charRefBase64, `as_char_ref_${Date.now()}.png`);
-                console.log('[ComfyUI] Uploaded character reference as:', refFilename);
+                if (status) status.innerHTML = '⏳ Preparing square IP-Adapter reference…';
+                const squaredRef = await squareCropForIPAdapter(charRefBase64, 1024);
+                refFilename = await uploadImageToComfy(base, squaredRef, `as_char_ref_${Date.now()}.png`);
+                console.log('[ComfyUI] Uploaded squared character reference as:', refFilename);
             } catch (e) {
-                console.warn('[ComfyUI] Could not upload reference, falling back to text-only:', e);
+                console.warn('[ComfyUI] Could not prepare/upload reference, falling back to text-only:', e);
             }
         }
 
