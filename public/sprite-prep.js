@@ -246,15 +246,20 @@
             alert('Please select a generated image first.');
             return;
         }
+
+        // Make sure the global handoff object exists
+        if (!window.ASAdventurer) window.ASAdventurer = {};
+        if (!window.ASAdventurer.handoff) window.ASAdventurer.handoff = {};
+
+        // This is what video-gen.js looks for
+        window.ASAdventurer.handoff.spriteBase64 = currentSelectedResult.imageSrc;
+
+        // Switch to the Video Gen tab
         const tabBar = document.getElementById('tabBar');
         if (tabBar) {
             const vtab = tabBar.querySelector('[data-tab="tab-video-gen"]');
             if (vtab) vtab.click();
         }
-        setTimeout(() => {
-            const st = document.getElementById('vgStatus');
-            if (st) st.innerHTML = '<span class="status-msg info">📌 Reference image ready from AI Generate.</span>';
-        }, 400);
     }
 
     async function handleGenerate() {
