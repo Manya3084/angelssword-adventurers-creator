@@ -1,4 +1,4 @@
- (function() {
+(function() {
     'use strict';
 
     const STORAGE = {
@@ -9,8 +9,21 @@
         IP_WEIGHT: 'comfyui_ipadapter_weight'
     };
 
+    /**
+     * Smart default:
+     * - localhost / 127.0.0.1 → http://127.0.0.1:8188
+     * - remote access → http://<current-hostname>:8188
+     */
+    function getAutoComfyUIUrl() {
+        const host = window.location.hostname;
+        if (!host || host === 'localhost' || host === '127.0.0.1') {
+            return 'http://127.0.0.1:8188';
+        }
+        return `http://${host}:8188`;
+    }
+
     const DEFAULTS = {
-        URL: 'http://127.0.0.1:8188',
+        URL: getAutoComfyUIUrl(),
         CKPT: 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors',
         IPADAPTER: 'ip-adapter-plus-face_sdxl_vit-h.safetensors',
         CLIPVISION: 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
@@ -18,7 +31,9 @@
     };
 
     function getSetting(key) {
-        return localStorage.getItem(STORAGE[key]) || DEFAULTS[key];
+        const saved = localStorage.getItem(STORAGE[key]);
+        if (saved !== null && saved !== '') return saved;
+        return DEFAULTS[key];
     }
 
     function setSetting(key, value) {
@@ -33,6 +48,9 @@
                 <div class="form-row">
                     <label>ComfyUI URL</label>
                     <input type="text" id="comfyuiUrl" value="${getSetting('URL')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">
+                        Auto-detects when empty: localhost → 127.0.0.1:8188, remote → same host:8188
+                    </div>
                 </div>
 
                 <div class="form-row">
@@ -139,7 +157,6 @@
         if (!settingsSection) return false;
         if (document.getElementById('comfyuiSettingsPanel')) return true;
 
-        // Find the Grok panel and insert after it
         const grokPanel = Array.from(settingsSection.children).find(el => 
             el.textContent && el.textContent.includes('Grok (SuperGrok OAuth)')
         );
@@ -170,7 +187,6 @@
         }, 500);
     }
 
-    // Watch for Settings tab
     const observer = new MutationObserver(() => {
         const settingsTab = document.getElementById('tab-settings');
         if (settingsTab && settingsTab.classList.contains('active')) {
@@ -179,7 +195,6 @@
     });
     observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class'] });
 
-    // Click handler for Settings tab
     document.addEventListener('click', (e) => {
         if (e.target.closest('[data-tab="tab-settings"]')) {
             setTimeout(tryInject, 400);
@@ -192,7 +207,6 @@
         setTimeout(tryInject, 1000);
     }
 
-    // Make Settings scrollable if needed
     const style = document.createElement('style');
     style.textContent = `
         #tab-settings { 
@@ -203,5 +217,5 @@
     `;
     document.head.appendChild(style);
 
-    console.log('[ComfyUI Bridge] Loaded with improved injection');
+    console.log('[ComfyUI Bridge] Loaded — auto URL:', getAutoComfyUIUrl());
 })();
