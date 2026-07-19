@@ -9,7 +9,10 @@
         IP_WEIGHT: 'comfyui_ipadapter_weight',
         CFG: 'comfyui_cfg',
         STEPS: 'comfyui_steps',
-        LORAS: 'comfyui_loras'
+        LORAS: 'comfyui_loras',
+        FLUX_CLIP_L: 'comfyui_flux_clip_l',
+        FLUX_T5: 'comfyui_flux_t5',
+        FLUX_VAE: 'comfyui_flux_vae'
     };
 
     const LORA_PRESETS = {
@@ -30,12 +33,15 @@
 
     const DEFAULTS = {
         URL: getAutoComfyUIUrl(),
-        CKPT: 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors',
+        CKPT: 'flux1-dev.safetensors',
         IPADAPTER: 'ip-adapter-plus-face_sdxl_vit-h.safetensors',
         CLIPVISION: 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
         IP_WEIGHT: 0.55,
-        CFG: 5.0,
-        STEPS: 28
+        CFG: 3.5,
+        STEPS: 28,
+        FLUX_CLIP_L: 'clip_l.safetensors',
+        FLUX_T5: 't5xxl_fp8_e4m3fn.safetensors',
+        FLUX_VAE: 'ae.safetensors'
     };
 
     function getSetting(key) {
@@ -123,20 +129,36 @@
                 </div>
 
                 <div class="form-row">
-                    <label>Sprite Checkpoint</label>
+                    <label>Model / UNET</label>
                     <input type="text" id="comfyuiCheckpoint" value="${getSetting('CKPT')}">
                     <div class="text-dim mt-1" style="font-size:0.7rem">
-                        Flux LoRAs need a Flux checkpoint. Pony/SDXL LoRAs need a Pony/SDXL checkpoint.
+                        Default: <code>flux1-dev.safetensors</code> (UNET). Names containing "flux" use the Flux workflow.
                     </div>
                 </div>
 
                 <div class="form-row">
-                    <label>IP-Adapter Model</label>
+                    <label>Flux CLIP-L</label>
+                    <input type="text" id="comfyuiFluxClipL" value="${getSetting('FLUX_CLIP_L')}">
+                </div>
+
+                <div class="form-row">
+                    <label>Flux T5</label>
+                    <input type="text" id="comfyuiFluxT5" value="${getSetting('FLUX_T5')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">fp8 recommended on 16GB VRAM (Arc)</div>
+                </div>
+
+                <div class="form-row">
+                    <label>Flux VAE</label>
+                    <input type="text" id="comfyuiFluxVae" value="${getSetting('FLUX_VAE')}">
+                </div>
+
+                <div class="form-row">
+                    <label>IP-Adapter Model <span class="text-dim">(Pony/SDXL only)</span></label>
                     <input type="text" id="comfyuiIpAdapter" value="${getSetting('IPADAPTER')}">
                 </div>
 
                 <div class="form-row">
-                    <label>CLIP Vision Model</label>
+                    <label>CLIP Vision Model <span class="text-dim">(Pony/SDXL only)</span></label>
                     <input type="text" id="comfyuiClipVision" value="${getSetting('CLIPVISION')}">
                 </div>
 
@@ -146,8 +168,9 @@
                 </div>
 
                 <div class="form-row">
-                    <label>CFG (Prompt Strength) <span id="comfyuiCfgValue" class="text-gold">${getSetting('CFG')}</span></label>
+                    <label>Guidance / CFG <span id="comfyuiCfgValue" class="text-gold">${getSetting('CFG')}</span></label>
                     <input type="range" id="comfyuiCfg" min="1" max="12" step="0.5" value="${getSetting('CFG')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">Flux guidance ~2.5–4.0 · Pony CFG ~4–7</div>
                 </div>
 
                 <div class="form-row">
@@ -159,7 +182,7 @@
 
                 <div class="panel-title" style="font-size:0.95rem"><span class="title-icon">🎨</span> LoRAs</div>
                 <div class="text-dim" style="font-size:0.7rem;margin-bottom:0.5rem">
-                    Files must be in ComfyUI <code>models/loras/</code>. Flux-named LoRAs require a Flux base model.
+                    Files must be in ComfyUI <code>models/loras/</code>. Flux LoRAs require the Flux workflow (model name contains "flux").
                 </div>
 
                 <div class="form-row">
@@ -188,6 +211,9 @@
     function wireComfyUISettings() {
         const urlInput = document.getElementById('comfyuiUrl');
         const ckptInput = document.getElementById('comfyuiCheckpoint');
+        const fluxClipL = document.getElementById('comfyuiFluxClipL');
+        const fluxT5 = document.getElementById('comfyuiFluxT5');
+        const fluxVae = document.getElementById('comfyuiFluxVae');
         const ipInput = document.getElementById('comfyuiIpAdapter');
         const clipInput = document.getElementById('comfyuiClipVision');
         const weightInput = document.getElementById('comfyuiIpWeight');
@@ -286,6 +312,9 @@
         saveBtn.addEventListener('click', () => {
             setSetting('URL', urlInput.value.trim());
             setSetting('CKPT', ckptInput.value.trim());
+            if (fluxClipL) setSetting('FLUX_CLIP_L', fluxClipL.value.trim());
+            if (fluxT5) setSetting('FLUX_T5', fluxT5.value.trim());
+            if (fluxVae) setSetting('FLUX_VAE', fluxVae.value.trim());
             setSetting('IPADAPTER', ipInput.value.trim());
             setSetting('CLIPVISION', clipInput.value.trim());
             if (weightInput) setSetting('IP_WEIGHT', weightInput.value);
