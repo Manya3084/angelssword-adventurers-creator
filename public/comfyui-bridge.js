@@ -9,11 +9,6 @@
         IP_WEIGHT: 'comfyui_ipadapter_weight'
     };
 
-    /**
-     * Smart default:
-     * - localhost / 127.0.0.1 → http://127.0.0.1:8188
-     * - remote access → http://<current-hostname>:8188
-     */
     function getAutoComfyUIUrl() {
         const host = window.location.hostname;
         if (!host || host === 'localhost' || host === '127.0.0.1') {
@@ -49,7 +44,7 @@
                     <label>ComfyUI URL</label>
                     <input type="text" id="comfyuiUrl" value="${getSetting('URL')}">
                     <div class="text-dim mt-1" style="font-size:0.7rem">
-                        Auto-detects when empty: localhost → 127.0.0.1:8188, remote → same host:8188
+                        Auto-detects when empty. Prefer setting COMFYUI_URL in docker-compose.
                     </div>
                 </div>
 
@@ -73,9 +68,10 @@
                     <input type="range" id="comfyuiIpWeight" min="0" max="2" step="0.05" value="${getSetting('IP_WEIGHT')}">
                 </div>
 
-                <div class="btn-group mt-2">
+                <div class="btn-group mt-2" style="flex-wrap:wrap; gap:0.5rem;">
                     <button id="comfyuiTestBtn" class="btn btn-secondary">Test Connection</button>
                     <button id="comfyuiSaveBtn" class="btn btn-primary">Save Settings</button>
+                    <button id="comfyuiRestartBtn" class="btn btn-danger" title="Restart ComfyUI process/container">🔄 Restart ComfyUI</button>
                 </div>
                 <div id="comfyuiStatus" class="mt-1 text-sm"></div>
             </div>
@@ -91,6 +87,7 @@
         const weightValue = document.getElementById('comfyuiIpWeightValue');
         const testBtn = document.getElementById('comfyuiTestBtn');
         const saveBtn = document.getElementById('comfyuiSaveBtn');
+        const restartBtn = document.getElementById('comfyuiRestartBtn');
         const statusEl = document.getElementById('comfyuiStatus');
 
         if (!urlInput) return;
@@ -148,6 +145,42 @@
                 }, 2000);
             }
         });
+
+        if (restartBtn) {
+            restartBtn.addEventListener('click', async () => {
+                if (!confirm('Restart ComfyUI? Any running generations will be cancelled.')) return;
+
+                if (statusEl) {
+                    statusEl.innerHTML = '<span class="spinner"></span> Restarting ComfyUI…';
+                    statusEl.className = 'text-sm text-dim';
+                }
+                restartBtn.disabled = true;
+
+                try {
+                    const resp = await fetch('/api/comfyui/restart', { method: 'POST' });
+                    const data = await resp.json().catch(() => ({}));
+
+                    if (resp.ok && data.ok) {
+                        if (statusEl) {
+                            statusEl.innerHTML = '✅ Restart command sent. Wait ~15–30s then Test Connection.';
+                            statusEl.className = 'text-sm text-green';
+                        }
+                    } else {
+                        if (statusEl) {
+                            statusEl.innerHTML = '❌ ' + (data.error || 'Restart failed');
+                            statusEl.className = 'text-sm text-red';
+                        }
+                    }
+                } catch (e) {
+                    if (statusEl) {
+                        statusEl.innerHTML = '❌ ' + e.message;
+                        statusEl.className = 'text-sm text-red';
+                    }
+                } finally {
+                    restartBtn.disabled = false;
+                }
+            });
+        }
 
         if (weightValue) weightValue.textContent = weightInput.value;
     }
