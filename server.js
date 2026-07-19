@@ -7,6 +7,9 @@ const { exec } = require('child_process');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Server-side default for ComfyUI (set in docker-compose / env)
+const COMFYUI_URL = (process.env.COMFYUI_URL || 'http://127.0.0.1:8188').replace(/\/$/, '');
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -20,6 +23,16 @@ app.use((req, res, next) => {
 
 const APP_DIR = process.pkg ? path.dirname(process.execPath) : __dirname;
 app.use(express.static(path.join(APP_DIR, 'public')));
+
+// ============================================
+// Config (so frontend can pick up server defaults)
+// ============================================
+app.get('/api/config', (req, res) => {
+    res.json({
+        comfyuiUrl: COMFYUI_URL,
+        port: PORT
+    });
+});
 
 // ============================================
 // xAI / SuperGrok OAuth
@@ -69,7 +82,6 @@ app.post('/api/xai/oauth/token', async (req, res) => {
     }
 });
 
-// Test Grok / xAI connection
 app.post('/api/xai/test', async (req, res) => {
     try {
         res.json({ ok: true, message: 'Grok proxy is reachable' });
@@ -160,8 +172,6 @@ app.post('/api/xai/images/generations', async (req, res) => {
 // ============================================
 // xAI / Grok Video
 // ============================================
-
-// Start a video generation job
 app.post('/api/xai/videos/generations', async (req, res) => {
     const auth = req.headers['authorization'] || (process.env.XAI_API_KEY ? `Bearer ${process.env.XAI_API_KEY}` : null);
     if (!auth) return res.status(401).json({ error: 'No xAI key' });
@@ -181,7 +191,6 @@ app.post('/api/xai/videos/generations', async (req, res) => {
     }
 });
 
-// Poll video generation status
 app.get('/api/xai/videos/:id', async (req, res) => {
     const auth = req.headers['authorization'] || (process.env.XAI_API_KEY ? `Bearer ${process.env.XAI_API_KEY}` : null);
     if (!auth) return res.status(401).json({ error: 'No xAI key' });
@@ -197,7 +206,6 @@ app.get('/api/xai/videos/:id', async (req, res) => {
     }
 });
 
-// Download a finished video (proxy to avoid CORS)
 app.post('/api/xai/video-fetch', async (req, res) => {
     const auth = req.headers['authorization'] || (process.env.XAI_API_KEY ? `Bearer ${process.env.XAI_API_KEY}` : null);
     const { url } = req.body || {};
@@ -228,13 +236,27 @@ app.post('/api/xai/video-fetch', async (req, res) => {
 // ============================================
 // ComfyUI
 // ============================================
-function sanitizeComfyBase(baseUrl) {
+function normalizeComfyBase(baseUrl) {
     if (!baseUrl) return null;
+    let s = String(baseUrl).trim();
+
+    // Fix common mistake: http://192.168.1.115/8188  →  http://192.168.1.115:8188
+    s = s.replace(/^(https?:\/\/[^\/:]+)\/(\d+)$/i, '$1:$2');
+
+    // Strip trailing slash
+    s = s.replace(/\/$/, '');
+
     try {
-        const u = new URL(baseUrl);
+        const u = new URL(s);
         const host = u.hostname;
-        const ok = host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') || host.startsWith('10.');
-        return ok ? u.origin : null;
+        const ok =
+            host === 'localhost' ||
+            host === '127.0.0.1' ||
+            host.startsWith('192.168.') ||
+            host.startsWith('10.') ||
+            host.startsWith('172.');
+        if (!ok) return null;
+        return u.origin;
     } catch {
         return null;
     }
@@ -242,7 +264,7 @@ function sanitizeComfyBase(baseUrl) {
 
 app.post('/api/comfyui/test', async (req, res) => {
     try {
-        const origin = sanitizeComfyBase((req.body && req.body.baseUrl) || 'http://127.0.0.1:8188');
+        const origin = normalizeComfyBase((req.body && req.body.baseUrl) || COMFYUI_URL);
         if (!origin) return res.status(400).json({ error: 'Invalid or non-local ComfyUI URL' });
 
         const response = await fetch(`${origin}/system_stats`, { timeout: 10000 });
@@ -255,38 +277,69 @@ app.post('/api/comfyui/test', async (req, res) => {
 
 app.post('/api/comfyui/proxy', async (req, res) => {
     try {
-        const { baseUrl, path, method, body, isBinary } = req.body || {};
-        const origin = baseUrl || process.env.COMFYUI_URL || 'http://127.0.0.1:8188';
-        const url = origin + (path.startsWith('/') ? path : '/' + path);
-        const opts = { method: method || 'GET', headers: {} };
-        if (body) {
+        const { baseUrl, path: reqPath, method, body, isBinary } = req.body || {};
+        const origin = normalizeComfyBase(baseUrl || COMFYUI_URL);
+        if (!origin) {
+            return res.status(400).json({ error: 'Invalid ComfyUI base URL' });
+        }
+
+        const p = (reqPath || '/').startsWith('/') ? reqPath : '/' + (reqPath || '');
+        const url = origin + p;
+
+        const opts = {
+            method: (method || 'GET').toUpperCase(),
+            headers: {}
+        };
+
+        if (body && opts.method !== 'GET' && opts.method !== 'HEAD') {
             opts.headers['Content-Type'] = 'application/json';
             opts.body = JSON.stringify(body);
         }
+
+        console.log(`[ComfyUI proxy] ${opts.method} ${url}`);
+
         const r = await fetch(url, opts);
+
         if (isBinary) {
-            res.status(r.status).set('Content-Type', r.headers.get('content-type')).send(await r.buffer());
+            res.status(r.status)
+                .set('Content-Type', r.headers.get('content-type') || 'application/octet-stream')
+                .send(await r.buffer());
         } else {
-            res.status(r.status).type('application/json').send(await r.text());
+            const text = await r.text();
+            if (r.status === 405) {
+                console.error(`[ComfyUI proxy] 405 Method Not Allowed for ${opts.method} ${url}`);
+            }
+            res.status(r.status).type('application/json').send(text);
         }
-    } catch (e) { res.status(502).json({ error: e.message }); }
+    } catch (e) {
+        console.error('[ComfyUI proxy] error:', e.message);
+        res.status(502).json({ error: e.message });
+    }
 });
 
 app.post('/api/comfyui/upload', async (req, res) => {
     try {
         const { baseUrl, image, filename } = req.body || {};
-        const origin = baseUrl || process.env.COMFYUI_URL || 'http://127.0.0.1:8188';
+        const origin = normalizeComfyBase(baseUrl || COMFYUI_URL);
+        if (!origin) return res.status(400).json({ error: 'Invalid ComfyUI base URL' });
+
         const buf = Buffer.from(image.includes(',') ? image.split(',')[1] : image, 'base64');
         const form = new FormData();
         form.append('image', buf, { filename: filename || `as_upload_${Date.now()}.png` });
         form.append('overwrite', 'true');
+
         const r = await fetch(`${origin}/upload/image`, {
-            method: 'POST', headers: form.getHeaders(), body: form
+            method: 'POST',
+            headers: form.getHeaders(),
+            body: form
         });
         res.status(r.status).type('application/json').send(await r.text());
-    } catch (e) { res.status(502).json({ error: e.message }); }
+    } catch (e) {
+        res.status(502).json({ error: e.message });
+    }
 });
 
 app.listen(PORT, () => {
     console.log(`AS Adventurer running on port ${PORT}`);
+    console.log(`ComfyUI default URL: ${COMFYUI_URL}`);
 });
