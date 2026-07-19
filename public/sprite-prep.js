@@ -10,7 +10,7 @@
     let aiProvider = localStorage.getItem('sg_ai_provider') || 'openai';
     let generatedResults = [];
     let currentSelectedResult = null;
-    let serverComfyUrl = null; // filled from /api/config
+    let serverComfyUrl = null;
 
     const DEFAULTS = {
         name: 'Mirrime the Mage',
@@ -18,7 +18,6 @@
         action: 'standing pose, confident expression'
     };
 
-    // Load server-side config once
     (async function loadServerConfig() {
         try {
             const r = await fetch('/api/config');
@@ -32,12 +31,6 @@
         }
     })();
 
-    /**
-     * Priority:
-     * 1. User-saved value in localStorage (Settings)
-     * 2. Server environment variable (COMFYUI_URL via /api/config)
-     * 3. Auto-detect from current page hostname
-     */
     function getComfyUIBaseUrl() {
         const saved = (localStorage.getItem('comfyui_base_url') || '').trim();
         if (saved) return saved.replace(/\/$/, '');
@@ -225,20 +218,37 @@
         return p;
     }
 
+    // Strong single-character prompt for Pony / SDXL
     function buildComfyPrompt() {
         const name = getFieldValue('sgCharName', DEFAULTS.name);
         const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
         const action = getFieldValue('sgCharAction', DEFAULTS.action);
 
-        let positive = `score_9, score_8_up, score_7_up, source_anime, rating_safe, ` +
-                       `full body, standing, clean sprite, white background, simple background, ` +
-                       `game asset, character design, ${name}, ${desc}, ${action}, ` +
-                       `sharp focus, highly detailed, anime style`;
+        let positive =
+            `score_9, score_8_up, score_7_up, source_anime, rating_safe, ` +
+            `solo, single character, 1girl, one person, alone, ` +
+            `full body, standing, centered, clean sprite, white background, simple background, plain background, ` +
+            `game asset, character design, character sheet style, ` +
+            `${name}, ${desc}, ${action}, ` +
+            `sharp focus, highly detailed, anime style`;
 
         if (selectedRaceMode === 'kanolith') positive += ', animal features, furry';
         if (selectedRaceMode === 'zoalith') positive += ', dragon features, scales';
 
         return positive;
+    }
+
+    function buildComfyNegative() {
+        return (
+            'score_6, score_5, score_4, ' +
+            'multiple characters, 2girls, 2boys, 3girls, 3boys, group, crowd, twins, clone, duplicate, ' +
+            'extra people, two characters, three characters, many characters, ' +
+            'blurry, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, ' +
+            'cropped, worst quality, low quality, normal quality, jpeg artifacts, ' +
+            'signature, watermark, username, artist name, ' +
+            'black background, solid black, empty, pure black, ' +
+            'collage, split screen, comic panel, multiple views'
+        );
     }
 
     function handoffToManual() {
@@ -471,8 +481,10 @@
     async function generateComfyUI(status, grid) {
         const base = getComfyUIBaseUrl();
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
+        // Prefer weight from Settings if present
+        const ipWeight = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.65');
 
-        console.log('[ComfyUI] Using base URL:', base);
+        console.log('[ComfyUI] Using base URL:', base, 'IP weight:', ipWeight);
 
         if (status) status.innerHTML = '⏳ Preparing IP-Adapter + Pony workflow...';
 
@@ -487,7 +499,7 @@
         }
 
         const positiveText = buildComfyPrompt();
-        const negativeText = 'score_6, score_5, score_4, blurry, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, artist name, black background, solid black, empty, pure black';
+        const negativeText = buildComfyNegative();
 
         let wf;
         let saveNodeId;
@@ -505,7 +517,7 @@
                         "ipadapter": ["3", 0],
                         "image": ["2", 0],
                         "clip_vision": ["4", 0],
-                        "weight": 0.85,
+                        "weight": isNaN(ipWeight) ? 0.65 : ipWeight,
                         "weight_type": "linear",
                         "combine_embeds": "concat",
                         "start_at": 0.0,
