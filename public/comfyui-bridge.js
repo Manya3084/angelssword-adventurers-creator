@@ -32,21 +32,51 @@
         return `http://${host}:8188`;
     }
 
-    // fp8-optimized defaults for Arc 16GB / Flux Dev
+    // Names MUST match ComfyUI's models/ listing exactly (case + subfolders)
     const DEFAULTS = {
         URL: getAutoComfyUIUrl(),
-        CKPT: 'FLUX.1-dev-fp8.safetensors',
+        CKPT: 'flux1-dev-fp8.safetensors',
         IPADAPTER: 'ip-adapter-plus-face_sdxl_vit-h.safetensors',
         CLIPVISION: 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
         IP_WEIGHT: 0.55,
         CFG: 3.5,
         STEPS: 24,
+        // Official OpenAI CLIP-L for Flux — download if missing from models/clip/
         FLUX_CLIP_L: 'clip_l.safetensors',
-        FLUX_T5: 't5xxl_fp8_e4m3fn.safetensors',
+        // Your disk has this under the t5/ subfolder
+        FLUX_T5: 't5/t5xxl_fp8_e4m3fn.safetensors',
         FLUX_VAE: 'ae.safetensors',
-        // auto = pick from filename; fp8_e4m3fn keeps weights in fp8 (saves VRAM)
         UNET_DTYPE: 'auto'
     };
+
+    // Fix wrong names previously saved in the browser
+    (function migrateBadDefaults() {
+        const fixes = {
+            [STORAGE.CKPT]: {
+                from: [
+                    'FLUX.1-dev-fp8.safetensors',
+                    'flux1-dev.safetensors',
+                    'ponyDiffusionV6XL_v6StartWithThisOne.safetensors'
+                ],
+                to: DEFAULTS.CKPT
+            },
+            [STORAGE.FLUX_T5]: {
+                from: [
+                    't5xxl_fp8_e4m3fn.safetensors',
+                    't5xxl_fp16.safetensors'
+                ],
+                to: DEFAULTS.FLUX_T5
+            }
+        };
+        try {
+            for (const [key, { from, to }] of Object.entries(fixes)) {
+                const cur = (localStorage.getItem(key) || '').trim();
+                if (!cur || from.some(f => f.toLowerCase() === cur.toLowerCase())) {
+                    localStorage.setItem(key, to);
+                }
+            }
+        } catch (e) { /* ignore */ }
+    })();
 
     function getSetting(key) {
         const saved = localStorage.getItem(STORAGE[key]);
@@ -147,7 +177,7 @@
                     <label>Model / UNET</label>
                     <input type="text" id="comfyuiCheckpoint" value="${getSetting('CKPT')}">
                     <div class="text-dim mt-1" style="font-size:0.7rem">
-                        Default: <code>FLUX.1-dev-fp8.safetensors</code>. Names containing "flux" use the Flux workflow.
+                        Must match ComfyUI list exactly. Yours: <code>flux1-dev-fp8.safetensors</code>
                     </div>
                 </div>
 
@@ -155,25 +185,30 @@
                     <label>UNET weight_dtype (fp8)</label>
                     <select id="comfyuiUnetDtype">${dtypeOpts}</select>
                     <div class="text-dim mt-1" style="font-size:0.7rem">
-                        For pre-quantized <code>*fp8*</code> models, <b>fp8_e4m3fn</b> avoids upcasting and saves VRAM on 16GB Arc.
-                        Try <b>fp8_e4m3fn_fast</b> if your ComfyUI build supports it. Use <b>default</b> only if loads fail.
+                        Prefer <b>fp8_e4m3fn</b> for pre-quantized fp8 UNETs on 16GB.
                     </div>
                 </div>
 
                 <div class="form-row">
                     <label>Flux CLIP-L</label>
                     <input type="text" id="comfyuiFluxClipL" value="${getSetting('FLUX_CLIP_L')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">
+                        Needs official <code>clip_l.safetensors</code> in <code>models/clip/</code> (not clip_l_hidream).
+                    </div>
                 </div>
 
                 <div class="form-row">
                     <label>Flux T5 (text encoder)</label>
                     <input type="text" id="comfyuiFluxT5" value="${getSetting('FLUX_T5')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">Default: <code>t5xxl_fp8_e4m3fn.safetensors</code> — required for 16GB with Flux</div>
+                    <div class="text-dim mt-1" style="font-size:0.7rem">
+                        Yours: <code>t5/t5xxl_fp8_e4m3fn.safetensors</code> (include the <code>t5/</code> prefix)
+                    </div>
                 </div>
 
                 <div class="form-row">
                     <label>Flux VAE</label>
                     <input type="text" id="comfyuiFluxVae" value="${getSetting('FLUX_VAE')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">Usually <code>ae.safetensors</code> in models/vae/</div>
                 </div>
 
                 <div class="form-row">
@@ -194,20 +229,20 @@
                 <div class="form-row">
                     <label>Guidance / CFG <span id="comfyuiCfgValue" class="text-gold">${getSetting('CFG')}</span></label>
                     <input type="range" id="comfyuiCfg" min="1" max="12" step="0.5" value="${getSetting('CFG')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">Flux fp8 sweet spot: <b>3.0–3.5</b> · Pony CFG ~4–7</div>
+                    <div class="text-dim mt-1" style="font-size:0.7rem">Flux fp8: <b>3.0–3.5</b></div>
                 </div>
 
                 <div class="form-row">
                     <label>Steps <span id="comfyuiStepsValue" class="text-gold">${getSetting('STEPS')}</span></label>
                     <input type="range" id="comfyuiSteps" min="10" max="50" step="1" value="${getSetting('STEPS')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">Flux fp8: <b>20–28</b> is enough (default 24)</div>
+                    <div class="text-dim mt-1" style="font-size:0.7rem">Flux fp8: <b>20–28</b></div>
                 </div>
 
                 <hr class="gold-divider">
 
                 <div class="panel-title" style="font-size:0.95rem"><span class="title-icon">🎨</span> LoRAs</div>
                 <div class="text-dim" style="font-size:0.7rem;margin-bottom:0.5rem">
-                    Files in <code>models/loras/</code>. Prefer one strong LoRA at 0.7–0.9 on fp8 to limit VRAM spikes.
+                    Files in <code>models/loras/</code>. Prefer one strong LoRA at 0.7–0.9 on fp8.
                 </div>
 
                 <div class="form-row">
