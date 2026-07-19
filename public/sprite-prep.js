@@ -55,6 +55,23 @@
         return Math.max(1, Math.min(4, selectedGenCount || 1));
     }
 
+    function getActiveLoras() {
+        try {
+            const raw = localStorage.getItem('comfyui_loras');
+            if (!raw) return [];
+            const arr = JSON.parse(raw);
+            if (!Array.isArray(arr)) return [];
+            return arr
+                .map(x => ({
+                    name: (x && x.name ? String(x.name) : '').trim(),
+                    strength: typeof x.strength === 'number' ? x.strength : parseFloat(x.strength)
+                }))
+                .filter(x => x.name && !isNaN(x.strength) && x.strength !== 0);
+        } catch {
+            return [];
+        }
+    }
+
     function getGrokTokenInfo() {
         const manualKey = localStorage.getItem('xai_api_key');
         if (manualKey && manualKey.startsWith('xai-')) {
@@ -530,88 +547,130 @@
         return data.name || data.filename || filename;
     }
 
+    /**
+     * Build workflow. Optionally chains LoraLoader nodes after the checkpoint.
+     * modelRef / clipRef are [nodeId, outputIndex] pairs.
+     */
     function buildComfyWorkflow(opts) {
         const {
             ckpt, positiveText, negativeText, refFilename,
-            ipWeight, seed, steps, cfg, ipAdapterFile, clipVisionFile
+            ipWeight, seed, steps, cfg, ipAdapterFile, clipVisionFile, loras
         } = opts;
 
-        if (refFilename) {
-            return {
-                wf: {
-                    "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
-                    "2": { "class_type": "LoadImage", "inputs": { "image": refFilename } },
-                    "3": { "class_type": "IPAdapterModelLoader", "inputs": { "ipadapter_file": ipAdapterFile } },
-                    "4": { "class_type": "CLIPVisionLoader", "inputs": { "clip_name": clipVisionFile } },
-                    "5": {
-                        "class_type": "IPAdapterAdvanced",
-                        "inputs": {
-                            "model": ["1", 0],
-                            "ipadapter": ["3", 0],
-                            "image": ["2", 0],
-                            "clip_vision": ["4", 0],
-                            "weight": ipWeight,
-                            "weight_type": "linear",
-                            "combine_embeds": "concat",
-                            "start_at": 0.0,
-                            "end_at": 1.0,
-                            "embeds_scaling": "V only"
-                        }
-                    },
-                    "6": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
-                    "7": { "class_type": "CLIPTextEncode", "inputs": { "text": negativeText, "clip": ["1", 1] } },
-                    "8": { "class_type": "EmptyLatentImage", "inputs": { "width": 1216, "height": 832, "batch_size": 1 } },
-                    "9": {
-                        "class_type": "KSampler",
-                        "inputs": {
-                            "seed": seed,
-                            "steps": steps,
-                            "cfg": cfg,
-                            "sampler_name": "dpmpp_2m",
-                            "scheduler": "karras",
-                            "denoise": 1,
-                            "model": ["5", 0],
-                            "positive": ["6", 0],
-                            "negative": ["7", 0],
-                            "latent_image": ["8", 0]
-                        }
-                    },
-                    "10": { "class_type": "VAEDecode", "inputs": { "samples": ["9", 0], "vae": ["1", 2] } },
-                    "11": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["10", 0] } }
-                },
-                saveNodeId: "11"
+        const wf = {};
+        let nextId = 1;
+
+        const ckptId = String(nextId++);
+        wf[ckptId] = { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } };
+
+        let modelRef = [ckptId, 0];
+        let clipRef = [ckptId, 1];
+        const vaeRef = [ckptId, 2];
+
+        // Chain LoRAs: each LoraLoader takes previous model+clip
+        const activeLoras = Array.isArray(loras) ? loras : [];
+        for (const L of activeLoras) {
+            const id = String(nextId++);
+            wf[id] = {
+                class_type: 'LoraLoader',
+                inputs: {
+                    lora_name: L.name,
+                    strength_model: L.strength,
+                    strength_clip: L.strength,
+                    model: modelRef,
+                    clip: clipRef
+                }
             };
+            modelRef = [id, 0];
+            clipRef = [id, 1];
         }
 
-        return {
-            wf: {
-                "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
-                "2": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
-                "3": { "class_type": "CLIPTextEncode", "inputs": { "text": negativeText, "clip": ["1", 1] } },
-                "4": { "class_type": "EmptyLatentImage", "inputs": { "width": 1216, "height": 832, "batch_size": 1 } },
-                "5": {
-                    "class_type": "KSampler",
-                    "inputs": {
-                        "seed": seed,
-                        "steps": steps,
-                        "cfg": cfg,
-                        "sampler_name": "dpmpp_2m",
-                        "scheduler": "karras",
-                        "denoise": 1,
-                        "model": ["1", 0],
-                        "positive": ["2", 0],
-                        "negative": ["3", 0],
-                        "latent_image": ["4", 0]
-                    }
-                },
-                "6": { "class_type": "VAEDecode", "inputs": { "samples": ["5", 0], "vae": ["1", 2] } },
-                "7": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["6", 0] } }
-            },
-            saveNodeId: "7"
+        if (refFilename) {
+            const loadImgId = String(nextId++);
+            const ipModelId = String(nextId++);
+            const clipVisId = String(nextId++);
+            const ipAdvId = String(nextId++);
+            const posId = String(nextId++);
+            const negId = String(nextId++);
+            const latentId = String(nextId++);
+            const sampleId = String(nextId++);
+            const decodeId = String(nextId++);
+            const saveId = String(nextId++);
+
+            wf[loadImgId] = { class_type: 'LoadImage', inputs: { image: refFilename } };
+            wf[ipModelId] = { class_type: 'IPAdapterModelLoader', inputs: { ipadapter_file: ipAdapterFile } };
+            wf[clipVisId] = { class_type: 'CLIPVisionLoader', inputs: { clip_name: clipVisionFile } };
+            wf[ipAdvId] = {
+                class_type: 'IPAdapterAdvanced',
+                inputs: {
+                    model: modelRef,
+                    ipadapter: [ipModelId, 0],
+                    image: [loadImgId, 0],
+                    clip_vision: [clipVisId, 0],
+                    weight: ipWeight,
+                    weight_type: 'linear',
+                    combine_embeds: 'concat',
+                    start_at: 0.0,
+                    end_at: 1.0,
+                    embeds_scaling: 'V only'
+                }
+            };
+            wf[posId] = { class_type: 'CLIPTextEncode', inputs: { text: positiveText, clip: clipRef } };
+            wf[negId] = { class_type: 'CLIPTextEncode', inputs: { text: negativeText, clip: clipRef } };
+            wf[latentId] = { class_type: 'EmptyLatentImage', inputs: { width: 1216, height: 832, batch_size: 1 } };
+            wf[sampleId] = {
+                class_type: 'KSampler',
+                inputs: {
+                    seed: seed,
+                    steps: steps,
+                    cfg: cfg,
+                    sampler_name: 'dpmpp_2m',
+                    scheduler: 'karras',
+                    denoise: 1,
+                    model: [ipAdvId, 0],
+                    positive: [posId, 0],
+                    negative: [negId, 0],
+                    latent_image: [latentId, 0]
+                }
+            };
+            wf[decodeId] = { class_type: 'VAEDecode', inputs: { samples: [sampleId, 0], vae: vaeRef } };
+            wf[saveId] = { class_type: 'SaveImage', inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] } };
+
+            return { wf, saveNodeId: saveId };
+        }
+
+        const posId = String(nextId++);
+        const negId = String(nextId++);
+        const latentId = String(nextId++);
+        const sampleId = String(nextId++);
+        const decodeId = String(nextId++);
+        const saveId = String(nextId++);
+
+        wf[posId] = { class_type: 'CLIPTextEncode', inputs: { text: positiveText, clip: clipRef } };
+        wf[negId] = { class_type: 'CLIPTextEncode', inputs: { text: negativeText, clip: clipRef } };
+        wf[latentId] = { class_type: 'EmptyLatentImage', inputs: { width: 1216, height: 832, batch_size: 1 } };
+        wf[sampleId] = {
+            class_type: 'KSampler',
+            inputs: {
+                seed: seed,
+                steps: steps,
+                cfg: cfg,
+                sampler_name: 'dpmpp_2m',
+                scheduler: 'karras',
+                denoise: 1,
+                model: modelRef,
+                positive: [posId, 0],
+                negative: [negId, 0],
+                latent_image: [latentId, 0]
+            }
         };
+        wf[decodeId] = { class_type: 'VAEDecode', inputs: { samples: [sampleId, 0], vae: vaeRef } };
+        wf[saveId] = { class_type: 'SaveImage', inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] } };
+
+        return { wf, saveNodeId: saveId };
     }
 
-    async function queueAndWaitOne(base, wf, saveNodeId, status, index, total, usingRef) {
+    async function queueAndWaitOne(base, wf, saveNodeId, status, index, total, usingRef, loraNote) {
         const q = await fetch('/api/comfyui/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -626,8 +685,9 @@
         if (!pid) throw new Error('No prompt_id from ComfyUI');
 
         if (status) {
-            const tag = usingRef ? ' + IP-Adapter ref' : ' (text only)';
-            status.innerHTML = `⏳ Generating ${index + 1} of ${total} with ComfyUI${tag}…`;
+            const tag = usingRef ? ' + IP-Adapter' : '';
+            const ltag = loraNote ? ' + LoRA' : '';
+            status.innerHTML = `⏳ Generating ${index + 1} of ${total} with ComfyUI${tag}${ltag}…`;
         }
 
         for (let i = 0; i < 45; i++) {
@@ -687,10 +747,11 @@
         const stepsRaw = parseInt(localStorage.getItem('comfyui_steps') || '28', 10);
         const steps = isNaN(stepsRaw) ? 28 : Math.max(10, Math.min(50, stepsRaw));
 
+        const loras = getActiveLoras();
         const total = count || getSelectedGenCount();
 
         console.log('[ComfyUI] base:', base, 'total:', total, 'IP:', ipWeight, 'CFG:', cfg, 'steps:', steps,
-            'ipAdapter:', ipAdapterFile, 'hasCharRef:', !!charRefBase64);
+            'loras:', loras, 'hasCharRef:', !!charRefBase64);
 
         let refFilename = null;
         if (charRefBase64) {
@@ -700,21 +761,25 @@
                 if (status) status.innerHTML = '⏳ Uploading character reference to ComfyUI…';
                 refFilename = await uploadImageToComfy(base, squaredRef, `as_char_ref_${Date.now()}.png`);
                 console.log('[ComfyUI] Uploaded squared character reference as:', refFilename);
-                if (status) status.innerHTML = `✅ Reference ready (${refFilename}) — IP weight ${ipWeight}`;
             } catch (e) {
                 console.error('[ComfyUI] Reference upload failed:', e);
-                // Do NOT silent-fail — tell the user clearly
                 throw new Error('Character reference failed to load into ComfyUI: ' + e.message +
                     '. Check ComfyUI URL in Settings and that /api/comfyui/upload works.');
             }
         } else {
             console.warn('[ComfyUI] No character reference uploaded in UI — generating text-only');
-            if (status) status.innerHTML = '⚠️ No Character Reference image — text-only generation';
         }
 
         const usingRef = !!refFilename;
-        if (status && usingRef) {
-            status.innerHTML = `⏳ Generating with IP-Adapter (weight ${ipWeight})…`;
+        const loraNote = loras.length > 0;
+
+        if (status) {
+            const parts = [];
+            if (usingRef) parts.push('IP-Adapter');
+            if (loraNote) parts.push(loras.map(l => l.name.replace(/\.safetensors$/i, '')).join(', '));
+            status.innerHTML = parts.length
+                ? `⏳ Generating with ${parts.join(' + ')}…`
+                : '⏳ Generating (text only)…';
         }
 
         const positiveText = buildComfyPrompt();
@@ -734,11 +799,12 @@
                 steps,
                 cfg,
                 ipAdapterFile,
-                clipVisionFile
+                clipVisionFile,
+                loras
             });
 
             try {
-                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, total, usingRef);
+                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, total, usingRef, loraNote);
                 const rd = { imageSrc: result.imageSrc, index: i, filename: result.filename };
                 generatedResults.push(rd);
                 const card = createResultCard(result.imageSrc, i, rd);
@@ -752,7 +818,7 @@
                 successCount++;
 
                 if (status) {
-                    status.innerHTML = `✅ ${successCount}/${total} done${usingRef ? ' (IP-Adapter)' : ' (text only)'} — continuing…`;
+                    status.innerHTML = `✅ ${successCount}/${total} done — continuing…`;
                 }
             } catch (e) {
                 console.error(`[ComfyUI] Generation ${i + 1} failed:`, e);
@@ -767,8 +833,11 @@
         }
 
         if (status) {
-            status.innerHTML = `✅ Generated ${successCount}/${total} sprite(s) with ComfyUI` +
-                (usingRef ? ` · IP-Adapter weight ${ipWeight}` : ' · text only (no reference)');
+            const extra = [];
+            if (usingRef) extra.push('IP-Adapter');
+            if (loraNote) extra.push(loras.length + ' LoRA(s)');
+            status.innerHTML = `✅ Generated ${successCount}/${total} sprite(s)` +
+                (extra.length ? ' · ' + extra.join(' · ') : ' · text only');
         }
     }
 
