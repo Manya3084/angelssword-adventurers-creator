@@ -10,13 +10,20 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - XAI_API_KEY=${XAI_API_KEY:-}
+      # Inside Docker network, talk to the comfyui service by name
       - COMFYUI_URL=http://comfyui:8188
+      # Restart button needs docker CLI + socket mount below
+      - COMFYUI_RESTART_CMD=docker restart comfyui
+    volumes:
+      # Allows the app container to restart the comfyui container
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - comfyui
     restart: unless-stopped
 
   comfyui:
     image: yanwk/comfyui-boot:xpu   # or comfyui/comfyui:latest for NVIDIA
+    container_name: comfyui
     ports:
       - "8188:8188"
     volumes:
