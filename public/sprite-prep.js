@@ -73,10 +73,6 @@
         return null;
     }
 
-    /**
-     * Center-crop to square and resize for IP-Adapter / CLIP vision.
-     * Avoids ComfyUI's "not a square" warning and keeps the subject centered.
-     */
     function squareCropForIPAdapter(dataUrl, outSize) {
         outSize = outSize || 1024;
         return new Promise((resolve, reject) => {
@@ -185,6 +181,7 @@
                 const r = new FileReader();
                 r.onload = ev => {
                     charRefBase64 = ev.target.result;
+                    console.log('[SpritePrep] Character reference loaded, bytes≈', Math.round((charRefBase64.length * 0.75) / 1024), 'KB');
                     if (charPrev) {
                         charPrev.innerHTML = `<img src="${charRefBase64}" style="max-height:120px; border-radius:8px; border:1px solid var(--border);">`;
                         charPrev.classList.remove('hidden');
@@ -355,7 +352,7 @@
         const resultsGrid = document.getElementById('sgResultsGrid');
 
         const count = getSelectedGenCount();
-        console.log('[SpritePrep] Generate clicked — provider:', aiProvider, 'count:', count);
+        console.log('[SpritePrep] Generate clicked — provider:', aiProvider, 'count:', count, 'hasCharRef:', !!charRefBase64);
 
         if (btn) btn.disabled = true;
         if (status) status.innerHTML = `<span class="spinner"></span> Starting ${count} generation(s)…`;
@@ -525,19 +522,27 @@
                 filename: filename || `as_ref_${Date.now()}.png`
             })
         });
-        if (!res.ok) throw new Error('Failed to upload reference image to ComfyUI');
+        if (!res.ok) {
+            const t = await res.text();
+            throw new Error('Failed to upload reference image to ComfyUI: ' + t.substring(0, 200));
+        }
         const data = await res.json();
         return data.name || data.filename || filename;
     }
 
-    function buildComfyWorkflow(ckpt, positiveText, negativeText, refFilename, ipWeight, seed, steps, cfg) {
+    function buildComfyWorkflow(opts) {
+        const {
+            ckpt, positiveText, negativeText, refFilename,
+            ipWeight, seed, steps, cfg, ipAdapterFile, clipVisionFile
+        } = opts;
+
         if (refFilename) {
             return {
                 wf: {
                     "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
                     "2": { "class_type": "LoadImage", "inputs": { "image": refFilename } },
-                    "3": { "class_type": "IPAdapterModelLoader", "inputs": { "ipadapter_file": "ip-adapter-plus-face_sdxl_vit-h.safetensors" } },
-                    "4": { "class_type": "CLIPVisionLoader", "inputs": { "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" } },
+                    "3": { "class_type": "IPAdapterModelLoader", "inputs": { "ipadapter_file": ipAdapterFile } },
+                    "4": { "class_type": "CLIPVisionLoader", "inputs": { "clip_name": clipVisionFile } },
                     "5": {
                         "class_type": "IPAdapterAdvanced",
                         "inputs": {
@@ -606,7 +611,7 @@
         };
     }
 
-    async function queueAndWaitOne(base, wf, saveNodeId, status, index, total) {
+    async function queueAndWaitOne(base, wf, saveNodeId, status, index, total, usingRef) {
         const q = await fetch('/api/comfyui/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -621,7 +626,8 @@
         if (!pid) throw new Error('No prompt_id from ComfyUI');
 
         if (status) {
-            status.innerHTML = `⏳ Generating ${index + 1} of ${total} with ComfyUI…`;
+            const tag = usingRef ? ' + IP-Adapter ref' : ' (text only)';
+            status.innerHTML = `⏳ Generating ${index + 1} of ${total} with ComfyUI${tag}…`;
         }
 
         for (let i = 0; i < 45; i++) {
@@ -669,6 +675,8 @@
     async function generateComfyUI(status, grid, resultsSection, count) {
         const base = getComfyUIBaseUrl();
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
+        const ipAdapterFile = localStorage.getItem('comfyui_ipadapter_model') || 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
+        const clipVisionFile = localStorage.getItem('comfyui_clip_vision_model') || 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors';
 
         const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.55');
         const ipWeight = isNaN(ipWeightRaw) ? 0.55 : ipWeightRaw;
@@ -681,20 +689,32 @@
 
         const total = count || getSelectedGenCount();
 
-        console.log('[ComfyUI] base:', base, 'total:', total, 'IP:', ipWeight, 'CFG:', cfg, 'steps:', steps);
-
-        if (status) status.innerHTML = `⏳ Preparing ${total} ComfyUI generation(s)… (CFG ${cfg}, ${steps} steps)`;
+        console.log('[ComfyUI] base:', base, 'total:', total, 'IP:', ipWeight, 'CFG:', cfg, 'steps:', steps,
+            'ipAdapter:', ipAdapterFile, 'hasCharRef:', !!charRefBase64);
 
         let refFilename = null;
         if (charRefBase64) {
             try {
                 if (status) status.innerHTML = '⏳ Preparing square IP-Adapter reference…';
                 const squaredRef = await squareCropForIPAdapter(charRefBase64, 1024);
+                if (status) status.innerHTML = '⏳ Uploading character reference to ComfyUI…';
                 refFilename = await uploadImageToComfy(base, squaredRef, `as_char_ref_${Date.now()}.png`);
                 console.log('[ComfyUI] Uploaded squared character reference as:', refFilename);
+                if (status) status.innerHTML = `✅ Reference ready (${refFilename}) — IP weight ${ipWeight}`;
             } catch (e) {
-                console.warn('[ComfyUI] Could not prepare/upload reference, falling back to text-only:', e);
+                console.error('[ComfyUI] Reference upload failed:', e);
+                // Do NOT silent-fail — tell the user clearly
+                throw new Error('Character reference failed to load into ComfyUI: ' + e.message +
+                    '. Check ComfyUI URL in Settings and that /api/comfyui/upload works.');
             }
+        } else {
+            console.warn('[ComfyUI] No character reference uploaded in UI — generating text-only');
+            if (status) status.innerHTML = '⚠️ No Character Reference image — text-only generation';
+        }
+
+        const usingRef = !!refFilename;
+        if (status && usingRef) {
+            status.innerHTML = `⏳ Generating with IP-Adapter (weight ${ipWeight})…`;
         }
 
         const positiveText = buildComfyPrompt();
@@ -704,12 +724,21 @@
 
         for (let i = 0; i < total; i++) {
             const seed = Math.floor(Math.random() * 1e9);
-            const { wf, saveNodeId } = buildComfyWorkflow(
-                ckpt, positiveText, negativeText, refFilename, ipWeight, seed, steps, cfg
-            );
+            const { wf, saveNodeId } = buildComfyWorkflow({
+                ckpt,
+                positiveText,
+                negativeText,
+                refFilename,
+                ipWeight,
+                seed,
+                steps,
+                cfg,
+                ipAdapterFile,
+                clipVisionFile
+            });
 
             try {
-                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, total);
+                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, total, usingRef);
                 const rd = { imageSrc: result.imageSrc, index: i, filename: result.filename };
                 generatedResults.push(rd);
                 const card = createResultCard(result.imageSrc, i, rd);
@@ -723,7 +752,7 @@
                 successCount++;
 
                 if (status) {
-                    status.innerHTML = `✅ ${successCount}/${total} done — continuing…`;
+                    status.innerHTML = `✅ ${successCount}/${total} done${usingRef ? ' (IP-Adapter)' : ' (text only)'} — continuing…`;
                 }
             } catch (e) {
                 console.error(`[ComfyUI] Generation ${i + 1} failed:`, e);
@@ -738,7 +767,8 @@
         }
 
         if (status) {
-            status.innerHTML = `✅ Generated ${successCount}/${total} sprite(s) with ComfyUI`;
+            status.innerHTML = `✅ Generated ${successCount}/${total} sprite(s) with ComfyUI` +
+                (usingRef ? ` · IP-Adapter weight ${ipWeight}` : ' · text only (no reference)');
         }
     }
 
