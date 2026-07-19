@@ -13,7 +13,10 @@
         FLUX_CLIP_L: 'comfyui_flux_clip_l',
         FLUX_T5: 'comfyui_flux_t5',
         FLUX_VAE: 'comfyui_flux_vae',
-        UNET_DTYPE: 'comfyui_unet_dtype'
+        UNET_DTYPE: 'comfyui_unet_dtype',
+        PULID_FILE: 'comfyui_pulid_file',
+        PULID_WEIGHT: 'comfyui_pulid_weight',
+        INSIGHTFACE_PROVIDER: 'comfyui_insightface_provider'
     };
 
     const LORA_PRESETS = {
@@ -32,7 +35,6 @@
         return `http://${host}:8188`;
     }
 
-    // Names MUST match ComfyUI's models/ listing exactly (case + subfolders)
     const DEFAULTS = {
         URL: getAutoComfyUIUrl(),
         CKPT: 'flux1-dev-fp8.safetensors',
@@ -41,15 +43,16 @@
         IP_WEIGHT: 0.55,
         CFG: 3.5,
         STEPS: 24,
-        // Official OpenAI CLIP-L for Flux — download if missing from models/clip/
         FLUX_CLIP_L: 'clip_l.safetensors',
-        // Your disk has this under the t5/ subfolder
         FLUX_T5: 't5/t5xxl_fp8_e4m3fn.safetensors',
         FLUX_VAE: 'ae.safetensors',
-        UNET_DTYPE: 'auto'
+        UNET_DTYPE: 'auto',
+        PULID_FILE: 'pulid_flux_v0.9.1.safetensors',
+        PULID_WEIGHT: 0.9,
+        // Intel Arc has no CUDA — default CPU for InsightFace
+        INSIGHTFACE_PROVIDER: 'CPU'
     };
 
-    // Fix wrong names previously saved in the browser
     (function migrateBadDefaults() {
         const fixes = {
             [STORAGE.CKPT]: {
@@ -136,6 +139,7 @@
     function buildComfyUISettingsHTML() {
         const loras = loadLoras();
         const dtype = getSetting('UNET_DTYPE');
+        const ifProvider = getSetting('INSIGHTFACE_PROVIDER');
         let loraRows = '';
         for (let i = 0; i < 3; i++) {
             const L = loras[i] || { name: '', strength: 0.8 };
@@ -159,6 +163,10 @@
             ['default', 'default — may upcast (more VRAM)']
         ].map(([v, label]) =>
             `<option value="${v}"${dtype === v ? ' selected' : ''}>${label}</option>`
+        ).join('');
+
+        const ifOpts = ['CPU', 'CUDA', 'ROCM'].map(v =>
+            `<option value="${v}"${ifProvider === v ? ' selected' : ''}>${v}${v === 'CPU' ? ' (Intel Arc / no NVIDIA)' : ''}</option>`
         ).join('');
 
         return `
@@ -192,24 +200,50 @@
                 <div class="form-row">
                     <label>Flux CLIP-L</label>
                     <input type="text" id="comfyuiFluxClipL" value="${getSetting('FLUX_CLIP_L')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">
-                        Needs official <code>clip_l.safetensors</code> in <code>models/clip/</code> (not clip_l_hidream).
-                    </div>
                 </div>
 
                 <div class="form-row">
                     <label>Flux T5 (text encoder)</label>
                     <input type="text" id="comfyuiFluxT5" value="${getSetting('FLUX_T5')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">
-                        Yours: <code>t5/t5xxl_fp8_e4m3fn.safetensors</code> (include the <code>t5/</code> prefix)
-                    </div>
                 </div>
 
                 <div class="form-row">
                     <label>Flux VAE</label>
                     <input type="text" id="comfyuiFluxVae" value="${getSetting('FLUX_VAE')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">Usually <code>ae.safetensors</code> in models/vae/</div>
                 </div>
+
+                <hr class="gold-divider">
+
+                <div class="panel-title" style="font-size:0.95rem"><span class="title-icon">🪪</span> PuLID-Flux <span class="text-dim" style="font-weight:400;text-transform:none;letter-spacing:0">(character reference)</span></div>
+                <div class="text-dim" style="font-size:0.7rem;margin-bottom:0.5rem">
+                    Used when you upload a <b>Character Reference</b> on Flux.
+                    Needs custom node <code>ComfyUI-PuLID-Flux</code> (or <code>ComfyUI_PuLID_Flux_ll</code>)
+                    + model in <code>models/pulid/</code> + AntelopeV2 in <code>models/insightface/models/antelopev2/</code>.
+                </div>
+
+                <div class="form-row">
+                    <label>PuLID model file</label>
+                    <input type="text" id="comfyuiPulidFile" value="${getSetting('PULID_FILE')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">
+                        Default: <code>pulid_flux_v0.9.1.safetensors</code> in <code>models/pulid/</code>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <label>PuLID weight <span id="comfyuiPulidWeightValue" class="text-gold">${getSetting('PULID_WEIGHT')}</span></label>
+                    <input type="range" id="comfyuiPulidWeight" min="0" max="1.5" step="0.05" value="${getSetting('PULID_WEIGHT')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">v0.9.1: try <b>0.9–1.0</b>. Lower if face overpowers the prompt.</div>
+                </div>
+
+                <div class="form-row">
+                    <label>InsightFace provider</label>
+                    <select id="comfyuiInsightfaceProvider">${ifOpts}</select>
+                    <div class="text-dim mt-1" style="font-size:0.7rem">
+                        Use <b>CPU</b> on Intel Arc (no CUDA). CUDA only with NVIDIA.
+                    </div>
+                </div>
+
+                <hr class="gold-divider">
 
                 <div class="form-row">
                     <label>IP-Adapter Model <span class="text-dim">(Pony/SDXL only)</span></label>
@@ -275,6 +309,10 @@
         const fluxClipL = document.getElementById('comfyuiFluxClipL');
         const fluxT5 = document.getElementById('comfyuiFluxT5');
         const fluxVae = document.getElementById('comfyuiFluxVae');
+        const pulidFile = document.getElementById('comfyuiPulidFile');
+        const pulidWeight = document.getElementById('comfyuiPulidWeight');
+        const pulidWeightValue = document.getElementById('comfyuiPulidWeightValue');
+        const ifProvider = document.getElementById('comfyuiInsightfaceProvider');
         const ipInput = document.getElementById('comfyuiIpAdapter');
         const clipInput = document.getElementById('comfyuiClipVision');
         const weightInput = document.getElementById('comfyuiIpWeight');
@@ -293,6 +331,11 @@
         if (weightInput) {
             weightInput.addEventListener('input', () => {
                 if (weightValue) weightValue.textContent = weightInput.value;
+            });
+        }
+        if (pulidWeight) {
+            pulidWeight.addEventListener('input', () => {
+                if (pulidWeightValue) pulidWeightValue.textContent = pulidWeight.value;
             });
         }
         if (cfgInput) {
@@ -377,6 +420,9 @@
             if (fluxClipL) setSetting('FLUX_CLIP_L', fluxClipL.value.trim());
             if (fluxT5) setSetting('FLUX_T5', fluxT5.value.trim());
             if (fluxVae) setSetting('FLUX_VAE', fluxVae.value.trim());
+            if (pulidFile) setSetting('PULID_FILE', pulidFile.value.trim());
+            if (pulidWeight) setSetting('PULID_WEIGHT', pulidWeight.value);
+            if (ifProvider) setSetting('INSIGHTFACE_PROVIDER', ifProvider.value);
             setSetting('IPADAPTER', ipInput.value.trim());
             setSetting('CLIPVISION', clipInput.value.trim());
             if (weightInput) setSetting('IP_WEIGHT', weightInput.value);
@@ -430,6 +476,7 @@
         }
 
         if (weightValue && weightInput) weightValue.textContent = weightInput.value;
+        if (pulidWeightValue && pulidWeight) pulidWeightValue.textContent = pulidWeight.value;
         if (cfgValue && cfgInput) cfgValue.textContent = cfgInput.value;
         if (stepsValue && stepsInput) stepsValue.textContent = stepsInput.value;
     }
@@ -439,7 +486,7 @@
         if (!settingsSection) return false;
         if (document.getElementById('comfyuiSettingsPanel')) return true;
 
-        const grokPanel = Array.from(settingsSection.children).find(el => 
+        const grokPanel = Array.from(settingsSection.children).find(el =>
             el.textContent && el.textContent.includes('Grok (SuperGrok OAuth)')
         );
 
@@ -491,12 +538,13 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        #tab-settings { 
-            max-height: calc(100vh - 120px); 
-            overflow-y: auto; 
+        #tab-settings {
+            max-height: calc(100vh - 120px);
+            overflow-y: auto;
             padding-bottom: 40px;
         }
-        #comfyuiUnetDtype {
+        #comfyuiUnetDtype,
+        #comfyuiInsightfaceProvider {
             width: 100%;
             padding: 0.4rem 0.5rem;
             border-radius: 6px;
@@ -507,5 +555,5 @@
     `;
     document.head.appendChild(style);
 
-    console.log('[ComfyUI Bridge] Loaded — auto URL:', getAutoComfyUIUrl());
+    console.log('[ComfyUI Bridge] Loaded — PuLID-Flux settings ready');
 })();
