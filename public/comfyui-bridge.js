@@ -6,7 +6,9 @@
         CKPT: 'comfyui_checkpoint',
         IPADAPTER: 'comfyui_ipadapter_model',
         CLIPVISION: 'comfyui_clip_vision_model',
-        IP_WEIGHT: 'comfyui_ipadapter_weight'
+        IP_WEIGHT: 'comfyui_ipadapter_weight',
+        CFG: 'comfyui_cfg',
+        STEPS: 'comfyui_steps'
     };
 
     function getAutoComfyUIUrl() {
@@ -22,7 +24,9 @@
         CKPT: 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors',
         IPADAPTER: 'ip-adapter-plus-face_sdxl_vit-h.safetensors',
         CLIPVISION: 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
-        IP_WEIGHT: 0.55
+        IP_WEIGHT: 0.55,
+        CFG: 5.0,
+        STEPS: 28
     };
 
     function getSetting(key) {
@@ -66,6 +70,19 @@
                 <div class="form-row">
                     <label>IP-Adapter Weight <span id="comfyuiIpWeightValue" class="text-gold">${getSetting('IP_WEIGHT')}</span></label>
                     <input type="range" id="comfyuiIpWeight" min="0" max="2" step="0.05" value="${getSetting('IP_WEIGHT')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">How strongly the reference image controls face/outfit (0.4–0.65 recommended)</div>
+                </div>
+
+                <div class="form-row">
+                    <label>CFG (Prompt Strength) <span id="comfyuiCfgValue" class="text-gold">${getSetting('CFG')}</span></label>
+                    <input type="range" id="comfyuiCfg" min="1" max="12" step="0.5" value="${getSetting('CFG')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">How hard the model follows your text prompt. Pony sweet spot: 4–7</div>
+                </div>
+
+                <div class="form-row">
+                    <label>Steps <span id="comfyuiStepsValue" class="text-gold">${getSetting('STEPS')}</span></label>
+                    <input type="range" id="comfyuiSteps" min="10" max="50" step="1" value="${getSetting('STEPS')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">How many denoising passes. More = finer detail, slower. 25–35 is typical</div>
                 </div>
 
                 <div class="btn-group mt-2" style="flex-wrap:wrap; gap:0.5rem;">
@@ -85,6 +102,10 @@
         const clipInput = document.getElementById('comfyuiClipVision');
         const weightInput = document.getElementById('comfyuiIpWeight');
         const weightValue = document.getElementById('comfyuiIpWeightValue');
+        const cfgInput = document.getElementById('comfyuiCfg');
+        const cfgValue = document.getElementById('comfyuiCfgValue');
+        const stepsInput = document.getElementById('comfyuiSteps');
+        const stepsValue = document.getElementById('comfyuiStepsValue');
         const testBtn = document.getElementById('comfyuiTestBtn');
         const saveBtn = document.getElementById('comfyuiSaveBtn');
         const restartBtn = document.getElementById('comfyuiRestartBtn');
@@ -92,9 +113,21 @@
 
         if (!urlInput) return;
 
-        weightInput.addEventListener('input', () => {
-            if (weightValue) weightValue.textContent = weightInput.value;
-        });
+        if (weightInput) {
+            weightInput.addEventListener('input', () => {
+                if (weightValue) weightValue.textContent = weightInput.value;
+            });
+        }
+        if (cfgInput) {
+            cfgInput.addEventListener('input', () => {
+                if (cfgValue) cfgValue.textContent = cfgInput.value;
+            });
+        }
+        if (stepsInput) {
+            stepsInput.addEventListener('input', () => {
+                if (stepsValue) stepsValue.textContent = stepsInput.value;
+            });
+        }
 
         testBtn.addEventListener('click', async () => {
             if (!statusEl) return;
@@ -135,7 +168,9 @@
             setSetting('CKPT', ckptInput.value.trim());
             setSetting('IPADAPTER', ipInput.value.trim());
             setSetting('CLIPVISION', clipInput.value.trim());
-            setSetting('IP_WEIGHT', weightInput.value);
+            if (weightInput) setSetting('IP_WEIGHT', weightInput.value);
+            if (cfgInput) setSetting('CFG', cfgInput.value);
+            if (stepsInput) setSetting('STEPS', stepsInput.value);
 
             if (statusEl) {
                 statusEl.innerHTML = '✅ Saved';
@@ -182,7 +217,9 @@
             });
         }
 
-        if (weightValue) weightValue.textContent = weightInput.value;
+        if (weightValue && weightInput) weightValue.textContent = weightInput.value;
+        if (cfgValue && cfgInput) cfgValue.textContent = cfgInput.value;
+        if (stepsValue && stepsInput) stepsValue.textContent = stepsInput.value;
     }
 
     function injectComfyUISettings() {
