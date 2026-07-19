@@ -218,7 +218,6 @@
         return p;
     }
 
-    // Strong single-character prompt for Pony / SDXL
     function buildComfyPrompt() {
         const name = getFieldValue('sgCharName', DEFAULTS.name);
         const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
@@ -478,15 +477,152 @@
         return data.name || data.filename || filename;
     }
 
+    function buildComfyWorkflow(ckpt, positiveText, negativeText, refFilename, ipWeight, seed) {
+        if (refFilename) {
+            return {
+                wf: {
+                    "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
+                    "2": { "class_type": "LoadImage", "inputs": { "image": refFilename } },
+                    "3": { "class_type": "IPAdapterModelLoader", "inputs": { "ipadapter_file": "ip-adapter-plus-face_sdxl_vit-h.safetensors" } },
+                    "4": { "class_type": "CLIPVisionLoader", "inputs": { "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" } },
+                    "5": {
+                        "class_type": "IPAdapterAdvanced",
+                        "inputs": {
+                            "model": ["1", 0],
+                            "ipadapter": ["3", 0],
+                            "image": ["2", 0],
+                            "clip_vision": ["4", 0],
+                            "weight": ipWeight,
+                            "weight_type": "linear",
+                            "combine_embeds": "concat",
+                            "start_at": 0.0,
+                            "end_at": 1.0,
+                            "embeds_scaling": "V only"
+                        }
+                    },
+                    "6": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
+                    "7": { "class_type": "CLIPTextEncode", "inputs": { "text": negativeText, "clip": ["1", 1] } },
+                    "8": { "class_type": "EmptyLatentImage", "inputs": { "width": 1216, "height": 832, "batch_size": 1 } },
+                    "9": {
+                        "class_type": "KSampler",
+                        "inputs": {
+                            "seed": seed,
+                            "steps": 28,
+                            "cfg": 5.0,
+                            "sampler_name": "dpmpp_2m",
+                            "scheduler": "karras",
+                            "denoise": 1,
+                            "model": ["5", 0],
+                            "positive": ["6", 0],
+                            "negative": ["7", 0],
+                            "latent_image": ["8", 0]
+                        }
+                    },
+                    "10": { "class_type": "VAEDecode", "inputs": { "samples": ["9", 0], "vae": ["1", 2] } },
+                    "11": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["10", 0] } }
+                },
+                saveNodeId: "11"
+            };
+        }
+
+        return {
+            wf: {
+                "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
+                "2": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
+                "3": { "class_type": "CLIPTextEncode", "inputs": { "text": negativeText, "clip": ["1", 1] } },
+                "4": { "class_type": "EmptyLatentImage", "inputs": { "width": 1216, "height": 832, "batch_size": 1 } },
+                "5": {
+                    "class_type": "KSampler",
+                    "inputs": {
+                        "seed": seed,
+                        "steps": 28,
+                        "cfg": 5.0,
+                        "sampler_name": "dpmpp_2m",
+                        "scheduler": "karras",
+                        "denoise": 1,
+                        "model": ["1", 0],
+                        "positive": ["2", 0],
+                        "negative": ["3", 0],
+                        "latent_image": ["4", 0]
+                    }
+                },
+                "6": { "class_type": "VAEDecode", "inputs": { "samples": ["5", 0], "vae": ["1", 2] } },
+                "7": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["6", 0] } }
+            },
+            saveNodeId: "7"
+        };
+    }
+
+    async function queueAndWaitOne(base, wf, saveNodeId, status, index, total) {
+        const q = await fetch('/api/comfyui/proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ baseUrl: base, path: '/prompt', method: 'POST', body: { prompt: wf } })
+        });
+        if (!q.ok) {
+            const errText = await q.text();
+            throw new Error('ComfyUI queue failed: ' + errText);
+        }
+        const qd = await q.json();
+        const pid = qd.prompt_id;
+        if (!pid) throw new Error('No prompt_id from ComfyUI');
+
+        if (status) {
+            status.innerHTML = `⏳ Generating ${index + 1}/${total} with ComfyUI…`;
+        }
+
+        for (let i = 0; i < 45; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+                const h = await fetch('/api/comfyui/proxy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseUrl: base, path: `/history/${pid}`, method: 'GET' })
+                });
+                const hist = await h.json();
+                const out = hist[pid]?.outputs?.[saveNodeId]?.images?.[0];
+                if (!out?.filename) continue;
+
+                const fname = out.filename;
+                const v = await fetch('/api/comfyui/proxy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        baseUrl: base,
+                        path: `/view?filename=${encodeURIComponent(fname)}&type=output`,
+                        method: 'GET',
+                        isBinary: true
+                    })
+                });
+
+                if (!v.ok) throw new Error('Failed to fetch image ' + fname);
+
+                const blob = await v.blob();
+                const dataUrl = await new Promise(resolve => {
+                    const fr = new FileReader();
+                    fr.onload = () => resolve(fr.result);
+                    fr.readAsDataURL(blob);
+                });
+
+                return { imageSrc: dataUrl, filename: fname };
+            } catch (e) {
+                // keep polling
+            }
+        }
+
+        throw new Error(`Timed out waiting for generation ${index + 1}`);
+    }
+
     async function generateComfyUI(status, grid) {
         const base = getComfyUIBaseUrl();
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
-        // Prefer weight from Settings if present
-        const ipWeight = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.65');
+        const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.65');
+        const ipWeight = isNaN(ipWeightRaw) ? 0.65 : ipWeightRaw;
+        const count = Math.max(1, Math.min(4, selectedGenCount || 1));
 
-        console.log('[ComfyUI] Using base URL:', base, 'IP weight:', ipWeight);
+        console.log('[ComfyUI] base:', base, 'count:', count, 'IP weight:', ipWeight);
 
-        if (status) status.innerHTML = '⏳ Preparing IP-Adapter + Pony workflow...';
+        if (status) status.innerHTML = '⏳ Preparing ComfyUI workflow…';
 
         let refFilename = null;
         if (charRefBase64) {
@@ -501,149 +637,40 @@
         const positiveText = buildComfyPrompt();
         const negativeText = buildComfyNegative();
 
-        let wf;
-        let saveNodeId;
+        let successCount = 0;
 
-        if (refFilename) {
-            wf = {
-                "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
-                "2": { "class_type": "LoadImage", "inputs": { "image": refFilename } },
-                "3": { "class_type": "IPAdapterModelLoader", "inputs": { "ipadapter_file": "ip-adapter-plus-face_sdxl_vit-h.safetensors" } },
-                "4": { "class_type": "CLIPVisionLoader", "inputs": { "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" } },
-                "5": {
-                    "class_type": "IPAdapterAdvanced",
-                    "inputs": {
-                        "model": ["1", 0],
-                        "ipadapter": ["3", 0],
-                        "image": ["2", 0],
-                        "clip_vision": ["4", 0],
-                        "weight": isNaN(ipWeight) ? 0.65 : ipWeight,
-                        "weight_type": "linear",
-                        "combine_embeds": "concat",
-                        "start_at": 0.0,
-                        "end_at": 1.0,
-                        "embeds_scaling": "V only"
-                    }
-                },
-                "6": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
-                "7": { "class_type": "CLIPTextEncode", "inputs": { "text": negativeText, "clip": ["1", 1] } },
-                "8": { "class_type": "EmptyLatentImage", "inputs": { "width": 1216, "height": 832, "batch_size": 1 } },
-                "9": {
-                    "class_type": "KSampler",
-                    "inputs": {
-                        "seed": Math.floor(Math.random() * 1e9),
-                        "steps": 28,
-                        "cfg": 5.0,
-                        "sampler_name": "dpmpp_2m",
-                        "scheduler": "karras",
-                        "denoise": 1,
-                        "model": ["5", 0],
-                        "positive": ["6", 0],
-                        "negative": ["7", 0],
-                        "latent_image": ["8", 0]
-                    }
-                },
-                "10": { "class_type": "VAEDecode", "inputs": { "samples": ["9", 0], "vae": ["1", 2] } },
-                "11": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["10", 0] } }
-            };
-            saveNodeId = "11";
-        } else {
-            wf = {
-                "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": ckpt } },
-                "2": { "class_type": "CLIPTextEncode", "inputs": { "text": positiveText, "clip": ["1", 1] } },
-                "3": { "class_type": "CLIPTextEncode", "inputs": { "text": negativeText, "clip": ["1", 1] } },
-                "4": { "class_type": "EmptyLatentImage", "inputs": { "width": 1216, "height": 832, "batch_size": 1 } },
-                "5": {
-                    "class_type": "KSampler",
-                    "inputs": {
-                        "seed": Math.floor(Math.random() * 1e9),
-                        "steps": 28,
-                        "cfg": 5.0,
-                        "sampler_name": "dpmpp_2m",
-                        "scheduler": "karras",
-                        "denoise": 1,
-                        "model": ["1", 0],
-                        "positive": ["2", 0],
-                        "negative": ["3", 0],
-                        "latent_image": ["4", 0]
-                    }
-                },
-                "6": { "class_type": "VAEDecode", "inputs": { "samples": ["5", 0], "vae": ["1", 2] } },
-                "7": { "class_type": "SaveImage", "inputs": { "filename_prefix": "as_adventurer", "images": ["6", 0] } }
-            };
-            saveNodeId = "7";
-        }
+        for (let i = 0; i < count; i++) {
+            const seed = Math.floor(Math.random() * 1e9);
+            const { wf, saveNodeId } = buildComfyWorkflow(
+                ckpt, positiveText, negativeText, refFilename, ipWeight, seed
+            );
 
-        const q = await fetch('/api/comfyui/proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ baseUrl: base, path: '/prompt', method: 'POST', body: { prompt: wf } })
-        });
-        if (!q.ok) {
-            const errText = await q.text();
-            throw new Error('ComfyUI queue failed: ' + errText);
-        }
-        const qd = await q.json();
-        const pid = qd.prompt_id;
-        if (status) status.innerHTML = refFilename ? '⏳ Generating with IP-Adapter + Pony @ 1216×832...' : '⏳ Generating with Pony @ 1216×832...';
-
-        if (!pid) return;
-
-        for (let i = 0; i < 40; i++) {
-            await new Promise(r => setTimeout(r, 2000));
             try {
-                const h = await fetch('/api/comfyui/proxy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ baseUrl: base, path: `/history/${pid}`, method: 'GET' })
-                });
-                const hist = await h.json();
-                const out = hist[pid]?.outputs?.[saveNodeId]?.images?.[0];
-                if (out?.filename) {
-                    const fname = out.filename;
-                    console.log('[ComfyUI] Got filename:', fname);
+                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, count);
+                const rd = { imageSrc: result.imageSrc, index: i, filename: result.filename };
+                generatedResults.push(rd);
+                const card = createResultCard(result.imageSrc, i, rd);
+                if (grid) grid.appendChild(card);
 
-                    try {
-                        const v = await fetch('/api/comfyui/proxy', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                baseUrl: base,
-                                path: `/view?filename=${encodeURIComponent(fname)}&type=output`,
-                                method: 'GET',
-                                isBinary: true
-                            })
-                        });
-
-                        if (v.ok) {
-                            const blob = await v.blob();
-                            const dataUrl = await new Promise(resolve => {
-                                const fr = new FileReader();
-                                fr.onload = () => resolve(fr.result);
-                                fr.readAsDataURL(blob);
-                            });
-
-                            const rd = { imageSrc: dataUrl, index: 0, filename: fname };
-                            generatedResults.push(rd);
-                            const card = createResultCard(dataUrl, 0, rd);
-                            if (grid) grid.appendChild(card);
-
-                            if (status) status.innerHTML = `✅ Generated (IP-Adapter + Pony)`;
-
-                            if (grid && grid.children.length === 1) {
-                                selectResult(card, rd);
-                            }
-                            return;
-                        }
-                    } catch (e) {
-                        console.error('[ComfyUI] Image fetch failed:', e);
-                        if (status) status.innerHTML = `✅ Saved: ${fname} (check ComfyUI output)`;
-                        return;
-                    }
+                if (successCount === 0) {
+                    selectResult(card, rd);
                 }
-            } catch (e) {}
+                successCount++;
+            } catch (e) {
+                console.error(`[ComfyUI] Generation ${i + 1} failed:`, e);
+                if (status) {
+                    status.innerHTML = `⚠️ Gen ${i + 1}/${count} failed: ${e.message}`;
+                }
+            }
         }
-        if (status) status.innerHTML = '⏳ Still processing...';
+
+        if (successCount === 0) {
+            throw new Error('All ComfyUI generations failed');
+        }
+
+        if (status) {
+            status.innerHTML = `✅ Generated ${successCount}/${count} sprite(s) with ComfyUI`;
+        }
     }
 
     if (document.readyState === 'loading') {
