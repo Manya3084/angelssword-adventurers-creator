@@ -8,7 +8,16 @@
         CLIPVISION: 'comfyui_clip_vision_model',
         IP_WEIGHT: 'comfyui_ipadapter_weight',
         CFG: 'comfyui_cfg',
-        STEPS: 'comfyui_steps'
+        STEPS: 'comfyui_steps',
+        LORAS: 'comfyui_loras'
+    };
+
+    const LORA_PRESETS = {
+        none: [],
+        chibi: [{ name: 'flux_icLora_chibi.safetensors', strength: 0.85 }],
+        anime: [{ name: 'flux_dev_anime.safetensors', strength: 0.80 }],
+        pastel: [{ name: 'lora_pastel_anime_flux.safetensors', strength: 0.75 }],
+        character: [{ name: 'Canopus-Anime-Character-Art-FluxDev-LoRA.safetensors', strength: 0.80 }]
     };
 
     function getAutoComfyUIUrl() {
@@ -39,7 +48,68 @@
         localStorage.setItem(STORAGE[key], value);
     }
 
+    function loadLoras() {
+        try {
+            const raw = localStorage.getItem(STORAGE.LORAS);
+            if (!raw) return [{ name: '', strength: 0.8 }, { name: '', strength: 0.8 }, { name: '', strength: 0.8 }];
+            const arr = JSON.parse(raw);
+            if (!Array.isArray(arr)) throw new Error('bad');
+            while (arr.length < 3) arr.push({ name: '', strength: 0.8 });
+            return arr.slice(0, 3).map(x => ({
+                name: (x && x.name) || '',
+                strength: typeof x.strength === 'number' ? x.strength : parseFloat(x.strength) || 0.8
+            }));
+        } catch {
+            return [{ name: '', strength: 0.8 }, { name: '', strength: 0.8 }, { name: '', strength: 0.8 }];
+        }
+    }
+
+    function saveLoras(loras) {
+        localStorage.setItem(STORAGE.LORAS, JSON.stringify(loras));
+    }
+
+    function readLorasFromUI() {
+        const out = [];
+        for (let i = 0; i < 3; i++) {
+            const nameEl = document.getElementById('comfyuiLora' + i);
+            const strEl = document.getElementById('comfyuiLoraStr' + i);
+            out.push({
+                name: nameEl ? nameEl.value.trim() : '',
+                strength: strEl ? (parseFloat(strEl.value) || 0) : 0.8
+            });
+        }
+        return out;
+    }
+
+    function writeLorasToUI(loras) {
+        for (let i = 0; i < 3; i++) {
+            const L = loras[i] || { name: '', strength: 0.8 };
+            const nameEl = document.getElementById('comfyuiLora' + i);
+            const strEl = document.getElementById('comfyuiLoraStr' + i);
+            const valEl = document.getElementById('comfyuiLoraStrVal' + i);
+            if (nameEl) nameEl.value = L.name || '';
+            if (strEl) strEl.value = L.strength != null ? L.strength : 0.8;
+            if (valEl) valEl.textContent = strEl ? strEl.value : '0.8';
+        }
+    }
+
     function buildComfyUISettingsHTML() {
+        const loras = loadLoras();
+        let loraRows = '';
+        for (let i = 0; i < 3; i++) {
+            const L = loras[i] || { name: '', strength: 0.8 };
+            loraRows += `
+                <div class="form-row" style="margin-bottom:0.75rem">
+                    <label>LoRA ${i + 1}</label>
+                    <input type="text" id="comfyuiLora${i}" value="${(L.name || '').replace(/"/g, '"')}" placeholder="e.g. flux_icLora_chibi.safetensors">
+                    <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.35rem">
+                        <span class="text-dim" style="font-size:0.7rem;min-width:3.5rem">Strength</span>
+                        <input type="range" id="comfyuiLoraStr${i}" min="0" max="1.5" step="0.05" value="${L.strength}" style="flex:1">
+                        <span id="comfyuiLoraStrVal${i}" class="text-gold" style="min-width:2rem;font-size:0.8rem">${L.strength}</span>
+                    </div>
+                </div>`;
+        }
+
         return `
             <div class="glass-panel" id="comfyuiSettingsPanel">
                 <div class="panel-title"><span class="title-icon">🖥️</span> ComfyUI Local</div>
@@ -55,6 +125,9 @@
                 <div class="form-row">
                     <label>Sprite Checkpoint</label>
                     <input type="text" id="comfyuiCheckpoint" value="${getSetting('CKPT')}">
+                    <div class="text-dim mt-1" style="font-size:0.7rem">
+                        Flux LoRAs need a Flux checkpoint. Pony/SDXL LoRAs need a Pony/SDXL checkpoint.
+                    </div>
                 </div>
 
                 <div class="form-row">
@@ -70,20 +143,37 @@
                 <div class="form-row">
                     <label>IP-Adapter Weight <span id="comfyuiIpWeightValue" class="text-gold">${getSetting('IP_WEIGHT')}</span></label>
                     <input type="range" id="comfyuiIpWeight" min="0" max="2" step="0.05" value="${getSetting('IP_WEIGHT')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">How strongly the reference image controls face/outfit (0.4–0.65 recommended)</div>
                 </div>
 
                 <div class="form-row">
                     <label>CFG (Prompt Strength) <span id="comfyuiCfgValue" class="text-gold">${getSetting('CFG')}</span></label>
                     <input type="range" id="comfyuiCfg" min="1" max="12" step="0.5" value="${getSetting('CFG')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">How hard the model follows your text prompt. Pony sweet spot: 4–7</div>
                 </div>
 
                 <div class="form-row">
                     <label>Steps <span id="comfyuiStepsValue" class="text-gold">${getSetting('STEPS')}</span></label>
                     <input type="range" id="comfyuiSteps" min="10" max="50" step="1" value="${getSetting('STEPS')}">
-                    <div class="text-dim mt-1" style="font-size:0.7rem">How many denoising passes. More = finer detail, slower. 25–35 is typical</div>
                 </div>
+
+                <hr class="gold-divider">
+
+                <div class="panel-title" style="font-size:0.95rem"><span class="title-icon">🎨</span> LoRAs</div>
+                <div class="text-dim" style="font-size:0.7rem;margin-bottom:0.5rem">
+                    Files must be in ComfyUI <code>models/loras/</code>. Flux-named LoRAs require a Flux base model.
+                </div>
+
+                <div class="form-row">
+                    <label>Presets</label>
+                    <div class="btn-group" style="flex-wrap:wrap;gap:0.4rem" id="comfyuiLoraPresets">
+                        <button type="button" class="btn btn-sm btn-secondary" data-lora-preset="none">None</button>
+                        <button type="button" class="btn btn-sm btn-secondary" data-lora-preset="chibi">Chibi</button>
+                        <button type="button" class="btn btn-sm btn-secondary" data-lora-preset="anime">Anime</button>
+                        <button type="button" class="btn btn-sm btn-secondary" data-lora-preset="pastel">Pastel</button>
+                        <button type="button" class="btn btn-sm btn-secondary" data-lora-preset="character">Character Art</button>
+                    </div>
+                </div>
+
+                ${loraRows}
 
                 <div class="btn-group mt-2" style="flex-wrap:wrap; gap:0.5rem;">
                     <button id="comfyuiTestBtn" class="btn btn-secondary">Test Connection</button>
@@ -129,6 +219,36 @@
             });
         }
 
+        for (let i = 0; i < 3; i++) {
+            const strEl = document.getElementById('comfyuiLoraStr' + i);
+            const valEl = document.getElementById('comfyuiLoraStrVal' + i);
+            if (strEl && valEl) {
+                strEl.addEventListener('input', () => { valEl.textContent = strEl.value; });
+            }
+        }
+
+        const presetBox = document.getElementById('comfyuiLoraPresets');
+        if (presetBox) {
+            presetBox.addEventListener('click', (e) => {
+                const btn = e.target.closest('[data-lora-preset]');
+                if (!btn) return;
+                const key = btn.dataset.loraPreset;
+                const preset = LORA_PRESETS[key] || [];
+                const filled = [
+                    preset[0] || { name: '', strength: 0.8 },
+                    preset[1] || { name: '', strength: 0.8 },
+                    preset[2] || { name: '', strength: 0.8 }
+                ];
+                writeLorasToUI(filled);
+                if (statusEl) {
+                    statusEl.innerHTML = key === 'none'
+                        ? 'LoRAs cleared (click Save)'
+                        : `Preset “${key}” applied (click Save)`;
+                    statusEl.className = 'text-sm text-dim';
+                }
+            });
+        }
+
         testBtn.addEventListener('click', async () => {
             if (!statusEl) return;
             statusEl.innerHTML = '<span class="spinner"></span> Testing...';
@@ -171,6 +291,7 @@
             if (weightInput) setSetting('IP_WEIGHT', weightInput.value);
             if (cfgInput) setSetting('CFG', cfgInput.value);
             if (stepsInput) setSetting('STEPS', stepsInput.value);
+            saveLoras(readLorasFromUI());
 
             if (statusEl) {
                 statusEl.innerHTML = '✅ Saved';
