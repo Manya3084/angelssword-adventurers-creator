@@ -34,14 +34,14 @@
     function getComfyUIBaseUrl() {
         const saved = (localStorage.getItem('comfyui_base_url') || '').trim();
         if (saved) return saved.replace(/\/$/, '');
-
         if (serverComfyUrl) return serverComfyUrl.replace(/\/$/, '');
-
         const host = window.location.hostname;
-        if (!host || host === 'localhost' || host === '127.0.0.1') {
-            return 'http://127.0.0.1:8188';
-        }
+        if (!host || host === 'localhost' || host === '127.0.0.1') return 'http://127.0.0.1:8188';
         return `http://${host}:8188`;
+    }
+
+    function isFluxModel(name) {
+        return /flux/i.test(name || '');
     }
 
     function getSelectedGenCount() {
@@ -74,9 +74,7 @@
 
     function getGrokTokenInfo() {
         const manualKey = localStorage.getItem('xai_api_key');
-        if (manualKey && manualKey.startsWith('xai-')) {
-            return { type: 'api_key', value: manualKey };
-        }
+        if (manualKey && manualKey.startsWith('xai-')) return { type: 'api_key', value: manualKey };
         const raw = localStorage.getItem('xai_oauth_tokens');
         if (raw) {
             try {
@@ -101,7 +99,6 @@
                     const side = Math.min(w, h);
                     const sx = Math.floor((w - side) / 2);
                     const sy = Math.floor((h - side) / 2);
-
                     const canvas = document.createElement('canvas');
                     canvas.width = outSize;
                     canvas.height = outSize;
@@ -109,13 +106,8 @@
                     ctx.imageSmoothingEnabled = true;
                     ctx.imageSmoothingQuality = 'high';
                     ctx.drawImage(img, sx, sy, side, side, 0, 0, outSize, outSize);
-
-                    const result = canvas.toDataURL('image/png');
-                    console.log('[ComfyUI] Squared IP-Adapter ref:', w + 'x' + h, '→', outSize + 'x' + outSize, '(center crop)');
-                    resolve(result);
-                } catch (e) {
-                    reject(e);
-                }
+                    resolve(canvas.toDataURL('image/png'));
+                } catch (e) { reject(e); }
             };
             img.onerror = () => reject(new Error('Failed to load reference image for square crop'));
             img.src = dataUrl;
@@ -126,15 +118,12 @@
         const modeSelector = document.getElementById('spritePrepMode');
         const manualMode = document.getElementById('spriteManualMode');
         const generateMode = document.getElementById('spriteGenerateMode');
-
         if (modeSelector) {
             modeSelector.addEventListener('click', (e) => {
                 const btn = e.target.closest('.mode-btn');
                 if (!btn) return;
-
                 modeSelector.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-
                 if (btn.dataset.mode === 'manual') {
                     manualMode.classList.remove('hidden');
                     generateMode.classList.add('hidden');
@@ -144,7 +133,6 @@
                 }
             });
         }
-
         initAIGenerateMode();
     }
 
@@ -183,7 +171,6 @@
                 countBox.querySelectorAll('.gen-count-btn').forEach(x => x.classList.remove('active'));
                 b.classList.add('active');
                 selectedGenCount = parseInt(b.dataset.count, 10) || 1;
-                console.log('[SpritePrep] Simultaneous generations set to', selectedGenCount);
             });
             const def = countBox.querySelector('.gen-count-btn.active') || countBox.querySelector('.gen-count-btn');
             if (def) { def.classList.add('active'); selectedGenCount = parseInt(def.dataset.count, 10) || 1; }
@@ -198,7 +185,6 @@
                 const r = new FileReader();
                 r.onload = ev => {
                     charRefBase64 = ev.target.result;
-                    console.log('[SpritePrep] Character reference loaded, bytes≈', Math.round((charRefBase64.length * 0.75) / 1024), 'KB');
                     if (charPrev) {
                         charPrev.innerHTML = `<img src="${charRefBase64}" style="max-height:120px; border-radius:8px; border:1px solid var(--border);">`;
                         charPrev.classList.remove('hidden');
@@ -242,13 +228,10 @@
 
         const genBtn = document.getElementById('sgGenerateBtn');
         if (genBtn) genBtn.addEventListener('click', handleGenerate);
-
         const toManualBtn = document.getElementById('sgToManualBtn');
         if (toManualBtn) toManualBtn.addEventListener('click', handoffToManual);
-
         const handoffBtn = document.getElementById('sgHandoffBtn');
         if (handoffBtn) handoffBtn.addEventListener('click', handoffToVideoGen);
-
         updateGenerateButtonLabel();
     }
 
@@ -271,19 +254,25 @@
         const name = getFieldValue('sgCharName', DEFAULTS.name);
         const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
         const action = getFieldValue('sgCharAction', DEFAULTS.action);
-
         let p = `Full body clean sprite of ${name}. ${desc}. ${action}. White background, game asset style, clean lines. Race: ${selectedRaceMode}.`;
-
         if (charRefBase64) p += ` Use the uploaded character reference for face, clothing and pose accuracy.`;
         if (styleRefBase64) p += ` Match the visual style of the uploaded style reference.`;
-
         return p;
     }
 
-    function buildComfyPrompt() {
+    function buildComfyPrompt(useFlux) {
         const name = getFieldValue('sgCharName', DEFAULTS.name);
         const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
         const action = getFieldValue('sgCharAction', DEFAULTS.action);
+
+        if (useFlux) {
+            let p = `A full-body character sprite of ${name}, ${desc}, ${action}, ` +
+                `solo, single character, centered, clean white background, simple background, ` +
+                `game asset style, character design, sharp focus, highly detailed, anime style`;
+            if (selectedRaceMode === 'kanolith') p += ', animal features, furry';
+            if (selectedRaceMode === 'zoalith') p += ', dragon features, scales';
+            return p;
+        }
 
         let positive =
             `score_9, score_8_up, score_7_up, source_anime, rating_safe, ` +
@@ -292,10 +281,8 @@
             `game asset, character design, character sheet style, ` +
             `${name}, ${desc}, ${action}, ` +
             `sharp focus, highly detailed, anime style`;
-
         if (selectedRaceMode === 'kanolith') positive += ', animal features, furry';
         if (selectedRaceMode === 'zoalith') positive += ', dragon features, scales';
-
         return positive;
     }
 
@@ -317,18 +304,14 @@
             alert('Please select a generated image first.');
             return;
         }
-
         const modeSelector = document.getElementById('spritePrepMode');
         const manualMode = document.getElementById('spriteManualMode');
         const generateMode = document.getElementById('spriteGenerateMode');
-
         if (modeSelector) modeSelector.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
         const manualBtn = modeSelector ? modeSelector.querySelector('[data-mode="manual"]') : null;
         if (manualBtn) manualBtn.classList.add('active');
-
         if (manualMode) manualMode.classList.remove('hidden');
         if (generateMode) generateMode.classList.add('hidden');
-
         const canvas = document.getElementById('spCanvas');
         if (canvas) {
             const ctx = canvas.getContext('2d');
@@ -349,12 +332,9 @@
             alert('Please select a generated image first.');
             return;
         }
-
         if (!window.ASAdventurer) window.ASAdventurer = {};
         if (!window.ASAdventurer.handoff) window.ASAdventurer.handoff = {};
-
         window.ASAdventurer.handoff.spriteBase64 = currentSelectedResult.imageSrc;
-
         const tabBar = document.getElementById('tabBar');
         if (tabBar) {
             const vtab = tabBar.querySelector('[data-tab="tab-video-gen"]');
@@ -367,9 +347,7 @@
         const btn = document.getElementById('sgGenerateBtn');
         const resultsSection = document.getElementById('sgResultsSection');
         const resultsGrid = document.getElementById('sgResultsGrid');
-
         const count = getSelectedGenCount();
-        console.log('[SpritePrep] Generate clicked — provider:', aiProvider, 'count:', count, 'hasCharRef:', !!charRefBase64);
 
         if (btn) btn.disabled = true;
         if (status) status.innerHTML = `<span class="spinner"></span> Starting ${count} generation(s)…`;
@@ -379,17 +357,10 @@
         currentSelectedResult = null;
 
         try {
-            if (aiProvider === 'comfyui') {
-                await generateComfyUI(status, resultsGrid, resultsSection, count);
-            } else if (aiProvider === 'grok') {
-                await generateGrok(status, resultsGrid, count);
-            } else {
-                await generateOpenAI(status, resultsGrid, count);
-            }
-
-            if (resultsSection && resultsGrid?.children.length > 0) {
-                resultsSection.classList.remove('hidden');
-            }
+            if (aiProvider === 'comfyui') await generateComfyUI(status, resultsGrid, resultsSection, count);
+            else if (aiProvider === 'grok') await generateGrok(status, resultsGrid, count);
+            else await generateOpenAI(status, resultsGrid, count);
+            if (resultsSection && resultsGrid?.children.length > 0) resultsSection.classList.remove('hidden');
         } catch (e) {
             if (status) { status.innerHTML = '❌ ' + e.message; status.style.color = 'var(--red, red)'; }
         } finally {
@@ -401,24 +372,19 @@
         const card = document.createElement('div');
         card.className = 'result-card glass-panel';
         card.style.cssText = 'padding:8px; cursor:pointer;';
-
         const img = document.createElement('img');
         img.src = imageSrc;
         img.style.cssText = 'width:100%; border-radius:6px; display:block;';
-
         const btns = document.createElement('div');
         btns.style.cssText = 'display:flex; gap:6px; margin-top:8px;';
-
         const dl = document.createElement('button');
         dl.className = 'btn btn-sm btn-secondary';
         dl.textContent = '💾 Download';
         dl.onclick = (e) => { e.stopImmediatePropagation(); const a = document.createElement('a'); a.href = imageSrc; a.download = `generated_${index + 1}.png`; a.click(); };
-
         const sel = document.createElement('button');
         sel.className = 'btn btn-sm btn-primary';
         sel.textContent = '✓ Select';
         sel.onclick = (e) => { e.stopImmediatePropagation(); selectResult(card, resultData); };
-
         btns.appendChild(dl);
         btns.appendChild(sel);
         card.appendChild(img);
@@ -432,7 +398,6 @@
         card.style.border = '2px solid var(--accent-gold)';
         card.style.boxShadow = '0 0 0 3px rgba(219, 184, 88, 0.2)';
         currentSelectedResult = data;
-
         const canvas = document.getElementById('sgCanvas');
         if (canvas && data?.imageSrc) {
             const ctx = canvas.getContext('2d');
@@ -451,31 +416,22 @@
         const prompt = buildPrompt();
         const hasRef = !!charRefBase64;
         const n = count || getSelectedGenCount();
-
         let res;
         if (hasRef) {
             res = await fetch('/api/edits', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: 'gpt-image-2',
-                    prompt: prompt,
-                    n: n,
-                    size: '1024x1024',
-                    images: [charRefBase64]
-                })
+                body: JSON.stringify({ model: 'gpt-image-2', prompt, n, size: '1024x1024', images: [charRefBase64] })
             });
         } else {
             res = await fetch('/api/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'gpt-image-2', prompt, n: n, size: '1024x1024' })
+                body: JSON.stringify({ model: 'gpt-image-2', prompt, n, size: '1024x1024' })
             });
         }
-
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-
         data.data?.forEach((d, i) => {
             const src = d.b64_json ? `data:image/png;base64,${d.b64_json}` : d.url;
             if (src) {
@@ -484,24 +440,20 @@
                 grid.appendChild(createResultCard(src, i, rd));
             }
         });
-
         if (status) status.innerHTML = `✅ Generated ${data.data?.length || 0} sprite(s)`;
     }
 
     async function generateGrok(status, grid, count) {
         const tok = getGrokTokenInfo();
         if (!tok) throw new Error('No SuperGrok token or xAI API key found.');
-
         const prompt = buildPrompt();
         const n = count || getSelectedGenCount();
-        const models = ['grok-imagine-image-quality', 'grok-imagine-image'];
-
-        for (const model of models) {
+        for (const model of ['grok-imagine-image-quality', 'grok-imagine-image']) {
             try {
                 const res = await fetch('/api/xai/images/generations', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tok.value}` },
-                    body: JSON.stringify({ model, prompt, n: n })
+                    body: JSON.stringify({ model, prompt, n })
                 });
                 if (!res.ok) {
                     const txt = await res.text();
@@ -509,7 +461,6 @@
                     throw new Error(txt);
                 }
                 const data = await res.json();
-
                 if (data.data?.length) {
                     data.data.forEach((d, i) => {
                         const src = d.b64_json ? `data:image/png;base64,${d.b64_json}` : d.url;
@@ -522,9 +473,7 @@
                     if (status) status.innerHTML = `✅ Generated ${data.data.length} with ${model}`;
                     return;
                 }
-            } catch (e) {
-                console.error(e);
-            }
+            } catch (e) { console.error(e); }
         }
         throw new Error('Grok generation failed. Use an xAI API key from console.x.ai.');
     }
@@ -533,25 +482,109 @@
         const res = await fetch('/api/comfyui/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                baseUrl: baseUrl,
-                image: dataUrl,
-                filename: filename || `as_ref_${Date.now()}.png`
-            })
+            body: JSON.stringify({ baseUrl, image: dataUrl, filename: filename || `as_ref_${Date.now()}.png` })
         });
-        if (!res.ok) {
-            const t = await res.text();
-            throw new Error('Failed to upload reference image to ComfyUI: ' + t.substring(0, 200));
-        }
+        if (!res.ok) throw new Error('Failed to upload reference image to ComfyUI: ' + (await res.text()).substring(0, 200));
         const data = await res.json();
         return data.name || data.filename || filename;
     }
 
-    /**
-     * Build workflow. Optionally chains LoraLoader nodes after the checkpoint.
-     * modelRef / clipRef are [nodeId, outputIndex] pairs.
-     */
-    function buildComfyWorkflow(opts) {
+    function buildFluxWorkflow(opts) {
+        const {
+            unetName, clipL, t5, vaeName, positiveText, seed, steps, guidance, loras
+        } = opts;
+
+        const wf = {};
+        let nextId = 1;
+
+        const unetId = String(nextId++);
+        wf[unetId] = {
+            class_type: 'UNETLoader',
+            inputs: { unet_name: unetName, weight_dtype: 'default' }
+        };
+
+        const dualId = String(nextId++);
+        wf[dualId] = {
+            class_type: 'DualCLIPLoader',
+            inputs: { clip_name1: clipL, clip_name2: t5, type: 'flux' }
+        };
+
+        const vaeId = String(nextId++);
+        wf[vaeId] = { class_type: 'VAELoader', inputs: { vae_name: vaeName } };
+
+        let modelRef = [unetId, 0];
+        const activeLoras = Array.isArray(loras) ? loras : [];
+        for (const L of activeLoras) {
+            const id = String(nextId++);
+            // Model-only LoRA is the usual path for Flux
+            wf[id] = {
+                class_type: 'LoraLoaderModelOnly',
+                inputs: {
+                    lora_name: L.name,
+                    strength_model: L.strength,
+                    model: modelRef
+                }
+            };
+            modelRef = [id, 0];
+        }
+
+        const posId = String(nextId++);
+        wf[posId] = {
+            class_type: 'CLIPTextEncode',
+            inputs: { text: positiveText, clip: [dualId, 0] }
+        };
+
+        const negId = String(nextId++);
+        wf[negId] = {
+            class_type: 'CLIPTextEncode',
+            inputs: { text: '', clip: [dualId, 0] }
+        };
+
+        const guideId = String(nextId++);
+        wf[guideId] = {
+            class_type: 'FluxGuidance',
+            inputs: { guidance: guidance, conditioning: [posId, 0] }
+        };
+
+        const latentId = String(nextId++);
+        wf[latentId] = {
+            class_type: 'EmptySD3LatentImage',
+            inputs: { width: 1024, height: 1024, batch_size: 1 }
+        };
+
+        const sampleId = String(nextId++);
+        wf[sampleId] = {
+            class_type: 'KSampler',
+            inputs: {
+                seed: seed,
+                steps: steps,
+                cfg: 1,
+                sampler_name: 'euler',
+                scheduler: 'simple',
+                denoise: 1,
+                model: modelRef,
+                positive: [guideId, 0],
+                negative: [negId, 0],
+                latent_image: [latentId, 0]
+            }
+        };
+
+        const decodeId = String(nextId++);
+        wf[decodeId] = {
+            class_type: 'VAEDecode',
+            inputs: { samples: [sampleId, 0], vae: [vaeId, 0] }
+        };
+
+        const saveId = String(nextId++);
+        wf[saveId] = {
+            class_type: 'SaveImage',
+            inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] }
+        };
+
+        return { wf, saveNodeId: saveId };
+    }
+
+    function buildSdxlWorkflow(opts) {
         const {
             ckpt, positiveText, negativeText, refFilename,
             ipWeight, seed, steps, cfg, ipAdapterFile, clipVisionFile, loras
@@ -567,7 +600,6 @@
         let clipRef = [ckptId, 1];
         const vaeRef = [ckptId, 2];
 
-        // Chain LoRAs: each LoraLoader takes previous model+clip
         const activeLoras = Array.isArray(loras) ? loras : [];
         for (const L of activeLoras) {
             const id = String(nextId++);
@@ -621,9 +653,7 @@
             wf[sampleId] = {
                 class_type: 'KSampler',
                 inputs: {
-                    seed: seed,
-                    steps: steps,
-                    cfg: cfg,
+                    seed, steps, cfg,
                     sampler_name: 'dpmpp_2m',
                     scheduler: 'karras',
                     denoise: 1,
@@ -635,7 +665,6 @@
             };
             wf[decodeId] = { class_type: 'VAEDecode', inputs: { samples: [sampleId, 0], vae: vaeRef } };
             wf[saveId] = { class_type: 'SaveImage', inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] } };
-
             return { wf, saveNodeId: saveId };
         }
 
@@ -652,9 +681,7 @@
         wf[sampleId] = {
             class_type: 'KSampler',
             inputs: {
-                seed: seed,
-                steps: steps,
-                cfg: cfg,
+                seed, steps, cfg,
                 sampler_name: 'dpmpp_2m',
                 scheduler: 'karras',
                 denoise: 1,
@@ -666,31 +693,28 @@
         };
         wf[decodeId] = { class_type: 'VAEDecode', inputs: { samples: [sampleId, 0], vae: vaeRef } };
         wf[saveId] = { class_type: 'SaveImage', inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] } };
-
         return { wf, saveNodeId: saveId };
     }
 
-    async function queueAndWaitOne(base, wf, saveNodeId, status, index, total, usingRef, loraNote) {
+    function buildComfyWorkflow(opts) {
+        if (opts.useFlux) return buildFluxWorkflow(opts);
+        return buildSdxlWorkflow(opts);
+    }
+
+    async function queueAndWaitOne(base, wf, saveNodeId, status, index, total, tag) {
         const q = await fetch('/api/comfyui/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ baseUrl: base, path: '/prompt', method: 'POST', body: { prompt: wf } })
         });
-        if (!q.ok) {
-            const errText = await q.text();
-            throw new Error('ComfyUI queue failed: ' + errText);
-        }
+        if (!q.ok) throw new Error('ComfyUI queue failed: ' + await q.text());
         const qd = await q.json();
         const pid = qd.prompt_id;
         if (!pid) throw new Error('No prompt_id from ComfyUI');
 
-        if (status) {
-            const tag = usingRef ? ' + IP-Adapter' : '';
-            const ltag = loraNote ? ' + LoRA' : '';
-            status.innerHTML = `⏳ Generating ${index + 1} of ${total} with ComfyUI${tag}${ltag}…`;
-        }
+        if (status) status.innerHTML = `⏳ Generating ${index + 1} of ${total}${tag ? ' (' + tag + ')' : ''}…`;
 
-        for (let i = 0; i < 45; i++) {
+        for (let i = 0; i < 60; i++) {
             await new Promise(r => setTimeout(r, 2000));
             try {
                 const h = await fetch('/api/comfyui/proxy', {
@@ -713,84 +737,75 @@
                         isBinary: true
                     })
                 });
-
                 if (!v.ok) throw new Error('Failed to fetch image ' + fname);
-
                 const blob = await v.blob();
                 const dataUrl = await new Promise(resolve => {
                     const fr = new FileReader();
                     fr.onload = () => resolve(fr.result);
                     fr.readAsDataURL(blob);
                 });
-
                 return { imageSrc: dataUrl, filename: fname };
-            } catch (e) {
-                // keep polling
-            }
+            } catch (e) { /* keep polling */ }
         }
-
         throw new Error(`Timed out waiting for generation ${index + 1}`);
     }
 
     async function generateComfyUI(status, grid, resultsSection, count) {
         const base = getComfyUIBaseUrl();
-        const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
+        const ckpt = localStorage.getItem('comfyui_checkpoint') || 'flux1-dev.safetensors';
+        const useFlux = isFluxModel(ckpt);
+
         const ipAdapterFile = localStorage.getItem('comfyui_ipadapter_model') || 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
         const clipVisionFile = localStorage.getItem('comfyui_clip_vision_model') || 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors';
+        const fluxClipL = localStorage.getItem('comfyui_flux_clip_l') || 'clip_l.safetensors';
+        const fluxT5 = localStorage.getItem('comfyui_flux_t5') || 't5xxl_fp8_e4m3fn.safetensors';
+        const fluxVae = localStorage.getItem('comfyui_flux_vae') || 'ae.safetensors';
 
         const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.55');
         const ipWeight = isNaN(ipWeightRaw) ? 0.55 : ipWeightRaw;
-
-        const cfgRaw = parseFloat(localStorage.getItem('comfyui_cfg') || '5');
-        const cfg = isNaN(cfgRaw) ? 5.0 : Math.max(1, Math.min(12, cfgRaw));
-
+        const cfgRaw = parseFloat(localStorage.getItem('comfyui_cfg') || (useFlux ? '3.5' : '5'));
+        const cfg = isNaN(cfgRaw) ? (useFlux ? 3.5 : 5.0) : Math.max(1, Math.min(12, cfgRaw));
         const stepsRaw = parseInt(localStorage.getItem('comfyui_steps') || '28', 10);
         const steps = isNaN(stepsRaw) ? 28 : Math.max(10, Math.min(50, stepsRaw));
 
         const loras = getActiveLoras();
         const total = count || getSelectedGenCount();
 
-        console.log('[ComfyUI] base:', base, 'total:', total, 'IP:', ipWeight, 'CFG:', cfg, 'steps:', steps,
-            'loras:', loras, 'hasCharRef:', !!charRefBase64);
+        console.log('[ComfyUI] mode:', useFlux ? 'FLUX' : 'SDXL/Pony', 'model:', ckpt, 'loras:', loras);
 
+        // IP-Adapter currently only wired for SDXL/Pony path
         let refFilename = null;
-        if (charRefBase64) {
+        if (!useFlux && charRefBase64) {
             try {
                 if (status) status.innerHTML = '⏳ Preparing square IP-Adapter reference…';
                 const squaredRef = await squareCropForIPAdapter(charRefBase64, 1024);
-                if (status) status.innerHTML = '⏳ Uploading character reference to ComfyUI…';
                 refFilename = await uploadImageToComfy(base, squaredRef, `as_char_ref_${Date.now()}.png`);
-                console.log('[ComfyUI] Uploaded squared character reference as:', refFilename);
             } catch (e) {
-                console.error('[ComfyUI] Reference upload failed:', e);
-                throw new Error('Character reference failed to load into ComfyUI: ' + e.message +
-                    '. Check ComfyUI URL in Settings and that /api/comfyui/upload works.');
+                throw new Error('Character reference failed: ' + e.message);
             }
-        } else {
-            console.warn('[ComfyUI] No character reference uploaded in UI — generating text-only');
+        } else if (useFlux && charRefBase64) {
+            console.warn('[ComfyUI] Character reference ignored on Flux path (IP-Adapter not wired for Flux yet)');
         }
 
-        const usingRef = !!refFilename;
-        const loraNote = loras.length > 0;
-
-        if (status) {
-            const parts = [];
-            if (usingRef) parts.push('IP-Adapter');
-            if (loraNote) parts.push(loras.map(l => l.name.replace(/\.safetensors$/i, '')).join(', '));
-            status.innerHTML = parts.length
-                ? `⏳ Generating with ${parts.join(' + ')}…`
-                : '⏳ Generating (text only)…';
-        }
-
-        const positiveText = buildComfyPrompt();
+        const positiveText = buildComfyPrompt(useFlux);
         const negativeText = buildComfyNegative();
-
         let successCount = 0;
+        const tagParts = [useFlux ? 'Flux' : 'Pony'];
+        if (loras.length) tagParts.push(loras.length + ' LoRA');
+        if (refFilename) tagParts.push('IP-Adapter');
+        const tag = tagParts.join(' · ');
+
+        if (status) status.innerHTML = `⏳ ${tag} — starting…`;
 
         for (let i = 0; i < total; i++) {
             const seed = Math.floor(Math.random() * 1e9);
             const { wf, saveNodeId } = buildComfyWorkflow({
+                useFlux,
                 ckpt,
+                unetName: ckpt,
+                clipL: fluxClipL,
+                t5: fluxT5,
+                vaeName: fluxVae,
                 positiveText,
                 negativeText,
                 refFilename,
@@ -798,47 +813,30 @@
                 seed,
                 steps,
                 cfg,
+                guidance: cfg,
                 ipAdapterFile,
                 clipVisionFile,
                 loras
             });
 
             try {
-                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, total, usingRef, loraNote);
+                const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, total, tag);
                 const rd = { imageSrc: result.imageSrc, index: i, filename: result.filename };
                 generatedResults.push(rd);
                 const card = createResultCard(result.imageSrc, i, rd);
                 if (grid) grid.appendChild(card);
-
                 if (resultsSection) resultsSection.classList.remove('hidden');
-
-                if (successCount === 0) {
-                    selectResult(card, rd);
-                }
+                if (successCount === 0) selectResult(card, rd);
                 successCount++;
-
-                if (status) {
-                    status.innerHTML = `✅ ${successCount}/${total} done — continuing…`;
-                }
+                if (status) status.innerHTML = `✅ ${successCount}/${total} done — continuing…`;
             } catch (e) {
-                console.error(`[ComfyUI] Generation ${i + 1} failed:`, e);
-                if (status) {
-                    status.innerHTML = `⚠️ Gen ${i + 1}/${total} failed: ${e.message} — trying next…`;
-                }
+                console.error(`[ComfyUI] Gen ${i + 1} failed:`, e);
+                if (status) status.innerHTML = `⚠️ Gen ${i + 1}/${total} failed: ${e.message}`;
             }
         }
 
-        if (successCount === 0) {
-            throw new Error('All ComfyUI generations failed');
-        }
-
-        if (status) {
-            const extra = [];
-            if (usingRef) extra.push('IP-Adapter');
-            if (loraNote) extra.push(loras.length + ' LoRA(s)');
-            status.innerHTML = `✅ Generated ${successCount}/${total} sprite(s)` +
-                (extra.length ? ' · ' + extra.join(' · ') : ' · text only');
-        }
+        if (successCount === 0) throw new Error('All ComfyUI generations failed');
+        if (status) status.innerHTML = `✅ Generated ${successCount}/${total} · ${tag}`;
     }
 
     if (document.readyState === 'loading') {
@@ -846,5 +844,4 @@
     } else {
         initSpritePrep();
     }
-
 })();
