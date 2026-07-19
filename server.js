@@ -260,9 +260,11 @@ function normalizeComfyBase(baseUrl) {
         const ok =
             host === 'localhost' ||
             host === '127.0.0.1' ||
+            host === 'comfyui' ||          // docker-compose service name
+            host.endsWith('.local') ||
             host.startsWith('192.168.') ||
             host.startsWith('10.') ||
-            host.startsWith('172.');
+            /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
         if (!ok) return null;
         return u.origin;
     } catch {
