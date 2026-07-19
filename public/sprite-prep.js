@@ -44,7 +44,6 @@
         return `http://${host}:8188`;
     }
 
-    /** Always read live from the UI buttons so it can't get out of sync */
     function getSelectedGenCount() {
         const countBox = document.getElementById('sgGenCount');
         const active = countBox?.querySelector('.gen-count-btn.active');
@@ -319,7 +318,6 @@
         const resultsSection = document.getElementById('sgResultsSection');
         const resultsGrid = document.getElementById('sgResultsGrid');
 
-        // Force-refresh count from UI right when Generate is clicked
         const count = getSelectedGenCount();
         console.log('[SpritePrep] Generate clicked — provider:', aiProvider, 'count:', count);
 
@@ -496,7 +494,7 @@
         return data.name || data.filename || filename;
     }
 
-    function buildComfyWorkflow(ckpt, positiveText, negativeText, refFilename, ipWeight, seed) {
+    function buildComfyWorkflow(ckpt, positiveText, negativeText, refFilename, ipWeight, seed, steps, cfg) {
         if (refFilename) {
             return {
                 wf: {
@@ -526,8 +524,8 @@
                         "class_type": "KSampler",
                         "inputs": {
                             "seed": seed,
-                            "steps": 28,
-                            "cfg": 5.0,
+                            "steps": steps,
+                            "cfg": cfg,
                             "sampler_name": "dpmpp_2m",
                             "scheduler": "karras",
                             "denoise": 1,
@@ -554,8 +552,8 @@
                     "class_type": "KSampler",
                     "inputs": {
                         "seed": seed,
-                        "steps": 28,
-                        "cfg": 5.0,
+                        "steps": steps,
+                        "cfg": cfg,
                         "sampler_name": "dpmpp_2m",
                         "scheduler": "karras",
                         "denoise": 1,
@@ -625,7 +623,7 @@
 
                 return { imageSrc: dataUrl, filename: fname };
             } catch (e) {
-                // keep polling unless last attempt
+                // keep polling
             }
         }
 
@@ -635,13 +633,21 @@
     async function generateComfyUI(status, grid, resultsSection, count) {
         const base = getComfyUIBaseUrl();
         const ckpt = localStorage.getItem('comfyui_checkpoint') || 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors';
-        const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.65');
-        const ipWeight = isNaN(ipWeightRaw) ? 0.65 : ipWeightRaw;
+
+        const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.55');
+        const ipWeight = isNaN(ipWeightRaw) ? 0.55 : ipWeightRaw;
+
+        const cfgRaw = parseFloat(localStorage.getItem('comfyui_cfg') || '5');
+        const cfg = isNaN(cfgRaw) ? 5.0 : Math.max(1, Math.min(12, cfgRaw));
+
+        const stepsRaw = parseInt(localStorage.getItem('comfyui_steps') || '28', 10);
+        const steps = isNaN(stepsRaw) ? 28 : Math.max(10, Math.min(50, stepsRaw));
+
         const total = count || getSelectedGenCount();
 
-        console.log('[ComfyUI] base:', base, 'total:', total, 'IP weight:', ipWeight);
+        console.log('[ComfyUI] base:', base, 'total:', total, 'IP:', ipWeight, 'CFG:', cfg, 'steps:', steps);
 
-        if (status) status.innerHTML = `⏳ Preparing ${total} ComfyUI generation(s)…`;
+        if (status) status.innerHTML = `⏳ Preparing ${total} ComfyUI generation(s)… (CFG ${cfg}, ${steps} steps)`;
 
         let refFilename = null;
         if (charRefBase64) {
@@ -661,7 +667,7 @@
         for (let i = 0; i < total; i++) {
             const seed = Math.floor(Math.random() * 1e9);
             const { wf, saveNodeId } = buildComfyWorkflow(
-                ckpt, positiveText, negativeText, refFilename, ipWeight, seed
+                ckpt, positiveText, negativeText, refFilename, ipWeight, seed, steps, cfg
             );
 
             try {
@@ -671,7 +677,6 @@
                 const card = createResultCard(result.imageSrc, i, rd);
                 if (grid) grid.appendChild(card);
 
-                // Show results panel as soon as the first image arrives
                 if (resultsSection) resultsSection.classList.remove('hidden');
 
                 if (successCount === 0) {
