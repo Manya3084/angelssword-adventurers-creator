@@ -12,6 +12,8 @@
     let currentSelectedResult = null;
     let serverComfyUrl = null;
 
+    const FLUX_DEFAULT_UNET = 'FLUX.1-dev-fp8.safetensors';
+
     const DEFAULTS = {
         name: 'Mirrime the Mage',
         desc: 'Blue hair, red cape, golden feather cap, adventurer outfit',
@@ -31,6 +33,18 @@
         }
     })();
 
+    // One-time migrate: old Pony default stuck in localStorage → Flux
+    (function migrateLegacyCheckpoint() {
+        try {
+            const key = 'comfyui_checkpoint';
+            const cur = (localStorage.getItem(key) || '').trim();
+            if (!cur || /^ponyDiffusionV6XL/i.test(cur) || cur === 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors') {
+                console.warn('[ComfyUI] Migrating checkpoint', cur || '(empty)', '→', FLUX_DEFAULT_UNET);
+                localStorage.setItem(key, FLUX_DEFAULT_UNET);
+            }
+        } catch (e) { /* ignore */ }
+    })();
+
     function getComfyUIBaseUrl() {
         const saved = (localStorage.getItem('comfyui_base_url') || '').trim();
         if (saved) return saved.replace(/\/$/, '');
@@ -45,10 +59,28 @@
     }
 
     /**
-     * Resolve UNETLoader weight_dtype for fp8 quantization.
-     * Pre-quantized *fp8* checkpoints should stay in fp8_e4m3fn to avoid
-     * upcasting to bf16/fp16 (which blows past 16GB on Arc).
+     * Active checkpoint name.
+     * Prefers the Settings text field (even if user forgot Save), then localStorage,
+     * and never silently stays on the old Pony default.
      */
+    function getComfyCheckpoint() {
+        const liveEl = document.getElementById('comfyuiCheckpoint');
+        let ckpt = '';
+        if (liveEl && liveEl.value && liveEl.value.trim()) {
+            ckpt = liveEl.value.trim();
+        } else {
+            ckpt = (localStorage.getItem('comfyui_checkpoint') || '').trim();
+        }
+
+        if (!ckpt || /^ponyDiffusionV6XL/i.test(ckpt)) {
+            console.warn('[ComfyUI] Checkpoint fallback → Flux:', FLUX_DEFAULT_UNET, '(was:', ckpt || 'empty', ')');
+            ckpt = FLUX_DEFAULT_UNET;
+            localStorage.setItem('comfyui_checkpoint', ckpt);
+            if (liveEl) liveEl.value = ckpt;
+        }
+        return ckpt;
+    }
+
     function resolveUnetDtype(unetName) {
         const pref = (localStorage.getItem('comfyui_unet_dtype') || 'auto').trim();
         if (pref && pref !== 'auto') return pref;
@@ -520,7 +552,6 @@
             inputs: { unet_name: unetName, weight_dtype: dtype }
         };
 
-        // DualCLIP: CLIP-L + T5. Prefer fp8 T5 file so encoder stays memory-light.
         const dualId = String(nextId++);
         wf[dualId] = {
             class_type: 'DualCLIPLoader',
@@ -551,7 +582,6 @@
             inputs: { text: positiveText, clip: [dualId, 0] }
         };
 
-        // Flux: empty negative; guidance handled by FluxGuidance
         const negId = String(nextId++);
         wf[negId] = {
             class_type: 'CLIPTextEncode',
@@ -564,7 +594,6 @@
             inputs: { guidance: guidance, conditioning: [posId, 0] }
         };
 
-        // 1024² is the fp8-safe default on 16GB; avoid larger unless needed
         const latentId = String(nextId++);
         wf[latentId] = {
             class_type: 'EmptySD3LatentImage',
@@ -600,7 +629,7 @@
             inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] }
         };
 
-        console.log('[ComfyUI Flux] UNET dtype:', dtype, 'steps:', steps, 'guidance:', guidance);
+        console.log('[ComfyUI Flux] UNET:', unetName, 'dtype:', dtype, 'steps:', steps, 'guidance:', guidance);
         return { wf, saveNodeId: saveId };
     }
 
@@ -772,9 +801,15 @@
 
     async function generateComfyUI(status, grid, resultsSection, count) {
         const base = getComfyUIBaseUrl();
-        const ckpt = localStorage.getItem('comfyui_checkpoint') || 'FLUX.1-dev-fp8.safetensors';
+        // Always resolve via helper — migrates legacy Pony and prefers Settings field
+        const ckpt = getComfyCheckpoint();
         const useFlux = isFluxModel(ckpt);
         const weightDtype = resolveUnetDtype(ckpt);
+
+        if (!useFlux) {
+            console.warn('[ComfyUI] Model does not look like Flux:', ckpt,
+                '— using SDXL/Pony workflow. Set Model/UNET to FLUX.1-dev-fp8.safetensors and Save.');
+        }
 
         const ipAdapterFile = localStorage.getItem('comfyui_ipadapter_model') || 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
         const clipVisionFile = localStorage.getItem('comfyui_clip_vision_model') || 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors';
@@ -784,7 +819,6 @@
 
         const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.55');
         const ipWeight = isNaN(ipWeightRaw) ? 0.55 : ipWeightRaw;
-        // Flux fp8: guidance 3.5 default; steps 24 default
         const cfgRaw = parseFloat(localStorage.getItem('comfyui_cfg') || (useFlux ? '3.5' : '5'));
         const cfg = isNaN(cfgRaw) ? (useFlux ? 3.5 : 5.0) : Math.max(1, Math.min(12, cfgRaw));
         const stepsRaw = parseInt(localStorage.getItem('comfyui_steps') || (useFlux ? '24' : '28'), 10);
@@ -812,7 +846,7 @@
         const positiveText = buildComfyPrompt(useFlux);
         const negativeText = buildComfyNegative();
         let successCount = 0;
-        const tagParts = [useFlux ? 'Flux/' + weightDtype : 'Pony'];
+        const tagParts = [useFlux ? 'Flux/' + weightDtype : 'Pony/' + ckpt.split('/').pop()];
         if (loras.length) tagParts.push(loras.length + ' LoRA');
         if (refFilename) tagParts.push('IP-Adapter');
         const tag = tagParts.join(' · ');
