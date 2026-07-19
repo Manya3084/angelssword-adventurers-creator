@@ -12,7 +12,11 @@
     let currentSelectedResult = null;
     let serverComfyUrl = null;
 
-    const FLUX_DEFAULT_UNET = 'FLUX.1-dev-fp8.safetensors';
+    // Exact name from ComfyUI UNETLoader list
+    const FLUX_DEFAULT_UNET = 'flux1-dev-fp8.safetensors';
+    const FLUX_DEFAULT_T5 = 't5/t5xxl_fp8_e4m3fn.safetensors';
+    const FLUX_DEFAULT_CLIP_L = 'clip_l.safetensors';
+    const FLUX_DEFAULT_VAE = 'ae.safetensors';
 
     const DEFAULTS = {
         name: 'Mirrime the Mage',
@@ -33,14 +37,25 @@
         }
     })();
 
-    // One-time migrate: old Pony default stuck in localStorage → Flux
-    (function migrateLegacyCheckpoint() {
+    // Migrate wrong / legacy names stuck in browser localStorage
+    (function migrateLegacyModelNames() {
         try {
-            const key = 'comfyui_checkpoint';
-            const cur = (localStorage.getItem(key) || '').trim();
-            if (!cur || /^ponyDiffusionV6XL/i.test(cur) || cur === 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors') {
+            const ckptKey = 'comfyui_checkpoint';
+            const cur = (localStorage.getItem(ckptKey) || '').trim();
+            const badCkpt = !cur
+                || /^ponyDiffusionV6XL/i.test(cur)
+                || cur === 'FLUX.1-dev-fp8.safetensors'
+                || cur === 'flux1-dev.safetensors';
+            if (badCkpt) {
                 console.warn('[ComfyUI] Migrating checkpoint', cur || '(empty)', '→', FLUX_DEFAULT_UNET);
-                localStorage.setItem(key, FLUX_DEFAULT_UNET);
+                localStorage.setItem(ckptKey, FLUX_DEFAULT_UNET);
+            }
+
+            const t5Key = 'comfyui_flux_t5';
+            const t5 = (localStorage.getItem(t5Key) || '').trim();
+            if (!t5 || t5 === 't5xxl_fp8_e4m3fn.safetensors' || t5 === 't5xxl_fp16.safetensors') {
+                console.warn('[ComfyUI] Migrating T5', t5 || '(empty)', '→', FLUX_DEFAULT_T5);
+                localStorage.setItem(t5Key, FLUX_DEFAULT_T5);
             }
         } catch (e) { /* ignore */ }
     })();
@@ -58,11 +73,6 @@
         return /flux/i.test(name || '');
     }
 
-    /**
-     * Active checkpoint name.
-     * Prefers the Settings text field (even if user forgot Save), then localStorage,
-     * and never silently stays on the old Pony default.
-     */
     function getComfyCheckpoint() {
         const liveEl = document.getElementById('comfyuiCheckpoint');
         let ckpt = '';
@@ -72,8 +82,12 @@
             ckpt = (localStorage.getItem('comfyui_checkpoint') || '').trim();
         }
 
-        if (!ckpt || /^ponyDiffusionV6XL/i.test(ckpt)) {
-            console.warn('[ComfyUI] Checkpoint fallback → Flux:', FLUX_DEFAULT_UNET, '(was:', ckpt || 'empty', ')');
+        // Rewrite known-bad names to the on-disk Flux UNET
+        if (!ckpt
+            || /^ponyDiffusionV6XL/i.test(ckpt)
+            || ckpt === 'FLUX.1-dev-fp8.safetensors'
+            || ckpt === 'flux1-dev.safetensors') {
+            console.warn('[ComfyUI] Checkpoint fallback →', FLUX_DEFAULT_UNET, '(was:', ckpt || 'empty', ')');
             ckpt = FLUX_DEFAULT_UNET;
             localStorage.setItem('comfyui_checkpoint', ckpt);
             if (liveEl) liveEl.value = ckpt;
@@ -629,7 +643,7 @@
             inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] }
         };
 
-        console.log('[ComfyUI Flux] UNET:', unetName, 'dtype:', dtype, 'steps:', steps, 'guidance:', guidance);
+        console.log('[ComfyUI Flux] UNET:', unetName, 'CLIP-L:', clipL, 'T5:', t5, 'dtype:', dtype);
         return { wf, saveNodeId: saveId };
     }
 
@@ -763,7 +777,7 @@
 
         if (status) status.innerHTML = `⏳ Generating ${index + 1} of ${total}${tag ? ' (' + tag + ')' : ''}…`;
 
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < 90; i++) {
             await new Promise(r => setTimeout(r, 2000));
             try {
                 const h = await fetch('/api/comfyui/proxy', {
@@ -801,21 +815,20 @@
 
     async function generateComfyUI(status, grid, resultsSection, count) {
         const base = getComfyUIBaseUrl();
-        // Always resolve via helper — migrates legacy Pony and prefers Settings field
         const ckpt = getComfyCheckpoint();
         const useFlux = isFluxModel(ckpt);
         const weightDtype = resolveUnetDtype(ckpt);
 
         if (!useFlux) {
             console.warn('[ComfyUI] Model does not look like Flux:', ckpt,
-                '— using SDXL/Pony workflow. Set Model/UNET to FLUX.1-dev-fp8.safetensors and Save.');
+                '— using SDXL/Pony workflow. Set Model/UNET to flux1-dev-fp8.safetensors and Save.');
         }
 
         const ipAdapterFile = localStorage.getItem('comfyui_ipadapter_model') || 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
         const clipVisionFile = localStorage.getItem('comfyui_clip_vision_model') || 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors';
-        const fluxClipL = localStorage.getItem('comfyui_flux_clip_l') || 'clip_l.safetensors';
-        const fluxT5 = localStorage.getItem('comfyui_flux_t5') || 't5xxl_fp8_e4m3fn.safetensors';
-        const fluxVae = localStorage.getItem('comfyui_flux_vae') || 'ae.safetensors';
+        const fluxClipL = localStorage.getItem('comfyui_flux_clip_l') || FLUX_DEFAULT_CLIP_L;
+        const fluxT5 = localStorage.getItem('comfyui_flux_t5') || FLUX_DEFAULT_T5;
+        const fluxVae = localStorage.getItem('comfyui_flux_vae') || FLUX_DEFAULT_VAE;
 
         const ipWeightRaw = parseFloat(localStorage.getItem('comfyui_ipadapter_weight') || '0.55');
         const ipWeight = isNaN(ipWeightRaw) ? 0.55 : ipWeightRaw;
@@ -828,7 +841,7 @@
         const total = count || getSelectedGenCount();
 
         console.log('[ComfyUI] mode:', useFlux ? 'FLUX' : 'SDXL/Pony',
-            'model:', ckpt, 'dtype:', weightDtype, 'T5:', fluxT5, 'steps:', steps, 'guidance:', cfg, 'loras:', loras);
+            'model:', ckpt, 'CLIP-L:', fluxClipL, 'T5:', fluxT5, 'dtype:', weightDtype);
 
         let refFilename = null;
         if (!useFlux && charRefBase64) {
