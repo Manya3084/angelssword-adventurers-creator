@@ -3,7 +3,7 @@
  * Angel's Sword Studios
  *
  * Tab 2: Generate animated videos from sprite images.
- * Providers: Google Gemini Omni Flash  |  Grok Imagine (SuperGrok OAuth)
+ * Providers: Google Gemini Omni Flash  |  Grok video
  */
 
 (function() {
@@ -76,13 +76,19 @@
                 return;
             }
         } else if (provider === 'grok') {
-            if (!window.XaiOAuth) {
-                showToast('Grok OAuth module not loaded', 'error');
-                return;
+            // Prefer xAI API key, fall back to OAuth token if available
+            const manualKey = localStorage.getItem('xai_api_key');
+            let hasAuth = false;
+
+            if (manualKey && manualKey.startsWith('xai-')) {
+                hasAuth = true;
+            } else if (window.XaiOAuth) {
+                const token = await window.XaiOAuth.getAccessToken();
+                if (token) hasAuth = true;
             }
-            const token = await window.XaiOAuth.getAccessToken();
-            if (!token) {
-                showToast('Not logged in with SuperGrok. Go to Settings → Login with SuperGrok.', 'error');
+
+            if (!hasAuth) {
+                showToast('No xAI API key or Grok login found. Add a key in Settings or login with SuperGrok.', 'error');
                 return;
             }
         }
@@ -116,7 +122,7 @@
         document.getElementById('vgProgress')?.classList.add('active');
         document.getElementById('vgGenerateBtn').disabled = true;
         const status = document.getElementById('vgStatus');
-        const providerLabel = provider === 'grok' ? 'Grok Imagine' : 'Gemini Omni Flash';
+        const providerLabel = provider === 'grok' ? 'Grok video' : 'Gemini Omni Flash';
         status.innerHTML = `<div class="status-msg info"><span class="spinner"></span> Generating video with ${providerLabel} — this may take several minutes…</div>`;
 
         try {
@@ -275,9 +281,24 @@
         }
     }
 
+    async function getGrokAuthHeader() {
+        // Prefer manual xAI API key
+        const manualKey = localStorage.getItem('xai_api_key');
+        if (manualKey && manualKey.startsWith('xai-')) {
+            return `Bearer ${manualKey}`;
+        }
+
+        // Fall back to OAuth token if available
+        if (window.XaiOAuth) {
+            const token = await window.XaiOAuth.getAccessToken();
+            if (token) return `Bearer ${token}`;
+        }
+
+        throw new Error('No xAI API key or Grok login found. Add a key in Settings.');
+    }
+
     async function generateOneGrokVideo(prompt, duration, mode) {
-        const token = await window.XaiOAuth.getAccessToken();
-        if (!token) throw new Error('SuperGrok token unavailable — please re-login in Settings');
+        const authHeader = await getGrokAuthHeader();
 
         let textPrompt = prompt ||
             'Gentle breathing idle animation with slight body sway. Perfect seamless loop. Static locked-off camera. Keep the character and solid background exactly as in the source image.';
@@ -314,7 +335,7 @@
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
+                'Authorization': authHeader
             },
             body: JSON.stringify(body)
         });
@@ -335,7 +356,7 @@
         console.log('[VideoGen/Grok] Start response:', JSON.stringify(startData).substring(0, 400));
 
         // Immediate complete (rare)
-        const immediate = await tryExtractGrokVideo(token, startData);
+        const immediate = await tryExtractGrokVideo(authHeader, startData);
         if (immediate) return immediate;
 
         const requestId = startData.request_id
@@ -349,10 +370,10 @@
             throw new Error('No request_id in Grok video response: ' + JSON.stringify(startData).substring(0, 200));
         }
 
-        return pollGrokVideo(token, requestId);
+        return pollGrokVideo(authHeader, requestId);
     }
 
-    async function pollGrokVideo(token, requestId) {
+    async function pollGrokVideo(authHeader, requestId) {
         const maxAttempts = 90; // ~7.5 min at 5s
         const pollInterval = 5000;
         let consecutive403 = 0;
@@ -363,22 +384,21 @@
 
             await new Promise(r => setTimeout(r, pollInterval));
 
-            // Refresh token periodically in case long job
-            let authToken = token;
+            // Refresh auth if using OAuth
+            let currentAuth = authHeader;
             try {
-                const fresh = await window.XaiOAuth.getAccessToken();
-                if (fresh) authToken = fresh;
+                currentAuth = await getGrokAuthHeader();
             } catch (_) {}
 
             const fillEl = document.getElementById('vgProgressFill');
             const textEl = document.getElementById('vgProgressText');
             if (fillEl) fillEl.style.width = `${Math.min(95, ((i + 1) / maxAttempts) * 100)}%`;
-            if (textEl) textEl.textContent = `Grok Imagine generating… (${Math.floor((i + 1) * pollInterval / 1000)}s)`;
+            if (textEl) textEl.textContent = `Grok video generating… (${Math.floor((i + 1) * pollInterval / 1000)}s)`;
 
             try {
                 const resp = await fetch(`/api/xai/videos/${encodeURIComponent(requestId)}`, {
                     method: 'GET',
-                    headers: { 'Authorization': `Bearer ${authToken}` }
+                    headers: { 'Authorization': currentAuth }
                 });
 
                 const text = await resp.text();
@@ -390,21 +410,19 @@
                 }
                 lastBody = data;
 
-                // HTTP 202 = still processing (async accepted)
+                // HTTP 202 = still processing
                 if (resp.status === 202) {
                     consecutive403 = 0;
                     console.log('[VideoGen/Grok] pending (202)', data.progress != null ? data.progress + '%' : '');
                     continue;
                 }
 
-                // Rate limit / forbidden — backoff, then hard fail
                 if (resp.status === 403 || resp.status === 429) {
                     consecutive403++;
                     console.warn('[VideoGen/Grok] Poll', resp.status, 'count=', consecutive403, data);
 
-                    // If we previously saw a video URL in a 200 body, try extract from last good body
                     if (lastBody) {
-                        const maybe = await tryExtractGrokVideo(authToken, lastBody);
+                        const maybe = await tryExtractGrokVideo(currentAuth, lastBody);
                         if (maybe) return maybe;
                     }
 
@@ -415,18 +433,16 @@
                             formatApiError(data, resp.status)
                         );
                     }
-                    // exponential-ish backoff
                     await new Promise(r => setTimeout(r, 3000 * consecutive403));
                     continue;
                 }
 
                 if (resp.status === 401) {
-                    throw new Error('Grok auth expired during poll — re-login in Settings');
+                    throw new Error('Grok auth expired during poll — check your xAI API key or re-login in Settings');
                 }
 
                 if (!resp.ok && resp.status !== 200) {
                     console.warn('[VideoGen/Grok] Poll HTTP', resp.status, data);
-                    // keep going for transient 5xx
                     if (resp.status >= 500) continue;
                     throw new Error(formatApiError(data, resp.status));
                 }
@@ -436,13 +452,12 @@
                 const st = String(data.status || data.state || '').toLowerCase();
                 console.log('[VideoGen/Grok] Poll', resp.status, 'status=', st || '(none)', data.progress != null ? data.progress + '%' : '');
 
-                // Done if status says so OR video URL is present
                 const hasUrl = !!(data.video?.url || data.url || data.video_url);
                 if (
                     st === 'done' || st === 'completed' || st === 'succeeded' || st === 'success' ||
                     hasUrl
                 ) {
-                    const video = await tryExtractGrokVideo(authToken, data);
+                    const video = await tryExtractGrokVideo(currentAuth, data);
                     if (video) return video;
                     if (hasUrl) {
                         throw new Error('Grok returned a video URL but download failed — see console');
@@ -453,9 +468,7 @@
                     throw new Error(formatApiError(data, st));
                 }
 
-                // pending / processing / empty status → continue
             } catch (e) {
-                // Hard errors rethrow
                 if (
                     e.message && (
                         e.message.includes('Grok') ||
@@ -472,11 +485,12 @@
             }
         }
 
-        // Last chance extract
         if (lastBody) {
-            const token2 = await window.XaiOAuth.getAccessToken();
-            const maybe = await tryExtractGrokVideo(token2 || token, lastBody);
-            if (maybe) return maybe;
+            try {
+                const auth = await getGrokAuthHeader();
+                const maybe = await tryExtractGrokVideo(auth, lastBody);
+                if (maybe) return maybe;
+            } catch (_) {}
         }
 
         throw new Error('Grok video generation timed out after ~7–8 minutes');
@@ -485,7 +499,7 @@
     /**
      * Extract video from poll payload. Downloads remote URL via local proxy (CORS-safe).
      */
-    async function tryExtractGrokVideo(token, data) {
+    async function tryExtractGrokVideo(authHeader, data) {
         if (!data || typeof data !== 'object') return null;
 
         const remoteUrl = data.video?.url
@@ -502,7 +516,7 @@
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    'Authorization': authHeader
                 },
                 body: JSON.stringify({ url: remoteUrl })
             });
@@ -734,8 +748,8 @@
         if (!btn) return;
         const p = getSelectedProvider();
         if (p === 'grok') {
-            btn.innerHTML = '🎬 Generate Video (Grok Imagine)';
-            btn.title = 'Generate video(s) using Grok Imagine (SuperGrok)';
+            btn.innerHTML = '🎬 Generate Video (Grok)';
+            btn.title = 'Generate video(s) using Grok video';
         } else {
             btn.innerHTML = '🎬 Generate Video (Gemini)';
             btn.title = 'Generate video(s) using Gemini Omni Flash';
