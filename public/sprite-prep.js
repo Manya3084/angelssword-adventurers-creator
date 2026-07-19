@@ -12,7 +12,6 @@
     let currentSelectedResult = null;
     let serverComfyUrl = null;
 
-    // Exact name from ComfyUI UNETLoader list
     const FLUX_DEFAULT_UNET = 'flux1-dev-fp8.safetensors';
     const FLUX_DEFAULT_T5 = 't5/t5xxl_fp8_e4m3fn.safetensors';
     const FLUX_DEFAULT_CLIP_L = 'clip_l.safetensors';
@@ -37,7 +36,6 @@
         }
     })();
 
-    // Migrate wrong / legacy names stuck in browser localStorage
     (function migrateLegacyModelNames() {
         try {
             const ckptKey = 'comfyui_checkpoint';
@@ -82,7 +80,6 @@
             ckpt = (localStorage.getItem('comfyui_checkpoint') || '').trim();
         }
 
-        // Rewrite known-bad names to the on-disk Flux UNET
         if (!ckpt
             || /^ponyDiffusionV6XL/i.test(ckpt)
             || ckpt === 'FLUX.1-dev-fp8.safetensors'
@@ -175,6 +172,37 @@
         });
     }
 
+    function ensureResultsGridStyles() {
+        if (document.getElementById('sgResultsGridStyle')) return;
+        const style = document.createElement('style');
+        style.id = 'sgResultsGridStyle';
+        style.textContent = `
+            #sgResultsGrid.results-grid {
+                display: grid !important;
+                grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                gap: 0.75rem;
+                width: 100%;
+            }
+            #sgResultsGrid .result-card {
+                display: flex;
+                flex-direction: column;
+                min-width: 0;
+            }
+            #sgResultsGrid .result-card img {
+                width: 100%;
+                aspect-ratio: 1;
+                object-fit: cover;
+                border-radius: 6px;
+            }
+            #sgResultsGrid .result-card .result-label {
+                font-size: 0.75rem;
+                opacity: 0.8;
+                margin-bottom: 0.35rem;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
     function initSpritePrep() {
         const modeSelector = document.getElementById('spritePrepMode');
         const manualMode = document.getElementById('spriteManualMode');
@@ -194,6 +222,7 @@
                 }
             });
         }
+        ensureResultsGridStyles();
         initAIGenerateMode();
     }
 
@@ -410,6 +439,8 @@
         const resultsGrid = document.getElementById('sgResultsGrid');
         const count = getSelectedGenCount();
 
+        ensureResultsGridStyles();
+
         if (btn) btn.disabled = true;
         if (status) status.innerHTML = `<span class="spinner"></span> Starting ${count} generation(s)…`;
         if (resultsSection) resultsSection.classList.add('hidden');
@@ -421,7 +452,14 @@
             if (aiProvider === 'comfyui') await generateComfyUI(status, resultsGrid, resultsSection, count);
             else if (aiProvider === 'grok') await generateGrok(status, resultsGrid, count);
             else await generateOpenAI(status, resultsGrid, count);
-            if (resultsSection && resultsGrid?.children.length > 0) resultsSection.classList.remove('hidden');
+
+            const gridNow = document.getElementById('sgResultsGrid');
+            const sectionNow = document.getElementById('sgResultsSection');
+            if (sectionNow && gridNow && gridNow.children.length > 0) {
+                sectionNow.classList.remove('hidden');
+            }
+            console.log('[Results] cards in grid:', gridNow ? gridNow.children.length : 0,
+                'generatedResults:', generatedResults.length);
         } catch (e) {
             if (status) { status.innerHTML = '❌ ' + e.message; status.style.color = 'var(--red, red)'; }
         } finally {
@@ -429,33 +467,62 @@
         }
     }
 
-    function createResultCard(imageSrc, index, resultData) {
+    function createResultCard(imageSrc, index, resultData, total) {
         const card = document.createElement('div');
         card.className = 'result-card glass-panel';
-        card.style.cssText = 'padding:8px; cursor:pointer;';
+        card.dataset.index = String(index);
+        card.style.cssText = 'padding:8px; cursor:pointer; border:1px solid var(--border);';
+
+        const label = document.createElement('div');
+        label.className = 'result-label text-dim';
+        label.textContent = total > 1 ? `Result ${index + 1} / ${total}` : `Result ${index + 1}`;
+
         const img = document.createElement('img');
         img.src = imageSrc;
-        img.style.cssText = 'width:100%; border-radius:6px; display:block;';
+        img.alt = `Generated sprite ${index + 1}`;
+        img.loading = 'eager';
+
         const btns = document.createElement('div');
-        btns.style.cssText = 'display:flex; gap:6px; margin-top:8px;';
+        btns.style.cssText = 'display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;';
+
         const dl = document.createElement('button');
         dl.className = 'btn btn-sm btn-secondary';
-        dl.textContent = '💾 Download';
-        dl.onclick = (e) => { e.stopImmediatePropagation(); const a = document.createElement('a'); a.href = imageSrc; a.download = `generated_${index + 1}.png`; a.click(); };
+        dl.type = 'button';
+        dl.textContent = '💾';
+        dl.title = 'Download';
+        dl.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const a = document.createElement('a');
+            a.href = imageSrc;
+            a.download = `generated_${index + 1}.png`;
+            a.click();
+        });
+
         const sel = document.createElement('button');
         sel.className = 'btn btn-sm btn-primary';
+        sel.type = 'button';
         sel.textContent = '✓ Select';
-        sel.onclick = (e) => { e.stopImmediatePropagation(); selectResult(card, resultData); };
+        sel.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            selectResult(card, resultData);
+        });
+
         btns.appendChild(dl);
         btns.appendChild(sel);
+        card.appendChild(label);
         card.appendChild(img);
         card.appendChild(btns);
-        img.onclick = () => selectResult(card, resultData);
+        card.addEventListener('click', () => selectResult(card, resultData));
         return card;
     }
 
     function selectResult(card, data) {
-        document.querySelectorAll('#sgResultsGrid .result-card').forEach(c => { c.style.border = '1px solid var(--border)'; c.style.boxShadow = 'none'; });
+        document.querySelectorAll('#sgResultsGrid .result-card').forEach(c => {
+            c.style.border = '1px solid var(--border)';
+            c.style.boxShadow = 'none';
+        });
         card.style.border = '2px solid var(--accent-gold)';
         card.style.boxShadow = '0 0 0 3px rgba(219, 184, 88, 0.2)';
         currentSelectedResult = data;
@@ -471,6 +538,25 @@
             };
             img.src = data.imageSrc;
         }
+    }
+
+    function appendResultCard(imageSrc, index, total) {
+        const grid = document.getElementById('sgResultsGrid');
+        const section = document.getElementById('sgResultsSection');
+        const rd = { imageSrc, index };
+        generatedResults.push(rd);
+        if (!grid) {
+            console.error('[Results] #sgResultsGrid not found');
+            return rd;
+        }
+        ensureResultsGridStyles();
+        const card = createResultCard(imageSrc, index, rd, total);
+        grid.appendChild(card);
+        if (section) section.classList.remove('hidden');
+        // Select first result by default; later ones stay available to click
+        if (index === 0 || !currentSelectedResult) selectResult(card, rd);
+        console.log('[Results] appended card', index + 1, 'of', total, '— grid children:', grid.children.length);
+        return rd;
     }
 
     async function generateOpenAI(status, grid, count) {
@@ -493,13 +579,9 @@
         }
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        data.data?.forEach((d, i) => {
+        (data.data || []).forEach((d, i) => {
             const src = d.b64_json ? `data:image/png;base64,${d.b64_json}` : d.url;
-            if (src) {
-                const rd = { imageSrc: src, index: i };
-                generatedResults.push(rd);
-                grid.appendChild(createResultCard(src, i, rd));
-            }
+            if (src) appendResultCard(src, i, (data.data || []).length);
         });
         if (status) status.innerHTML = `✅ Generated ${data.data?.length || 0} sprite(s)`;
     }
@@ -525,11 +607,7 @@
                 if (data.data?.length) {
                     data.data.forEach((d, i) => {
                         const src = d.b64_json ? `data:image/png;base64,${d.b64_json}` : d.url;
-                        if (src) {
-                            const rd = { imageSrc: src, index: i };
-                            generatedResults.push(rd);
-                            grid.appendChild(createResultCard(src, i, rd));
-                        }
+                        if (src) appendResultCard(src, i, data.data.length);
                     });
                     if (status) status.innerHTML = `✅ Generated ${data.data.length} with ${model}`;
                     return;
@@ -643,7 +721,6 @@
             inputs: { filename_prefix: 'as_adventurer', images: [decodeId, 0] }
         };
 
-        console.log('[ComfyUI Flux] UNET:', unetName, 'CLIP-L:', clipL, 'T5:', t5, 'dtype:', dtype);
         return { wf, saveNodeId: saveId };
     }
 
@@ -764,6 +841,54 @@
         return buildSdxlWorkflow(opts);
     }
 
+    /** Find any image outputs in a history entry (not only the Save node id). */
+    function extractHistoryImages(entry, preferredNodeId) {
+        if (!entry || !entry.outputs) return [];
+        const outs = entry.outputs;
+        const found = [];
+
+        if (preferredNodeId != null && outs[preferredNodeId]?.images?.length) {
+            return outs[preferredNodeId].images.filter(im => im && im.filename);
+        }
+        // Also try string/number key variants
+        const keys = Object.keys(outs);
+        for (const k of keys) {
+            const imgs = outs[k]?.images;
+            if (Array.isArray(imgs)) {
+                for (const im of imgs) {
+                    if (im && im.filename) found.push(im);
+                }
+            }
+        }
+        return found;
+    }
+
+    async function fetchComfyImageDataUrl(base, imageMeta) {
+        const fname = imageMeta.filename;
+        const subfolder = imageMeta.subfolder || '';
+        const type = imageMeta.type || 'output';
+        const qs = `filename=${encodeURIComponent(fname)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
+
+        const v = await fetch('/api/comfyui/proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                baseUrl: base,
+                path: `/view?${qs}`,
+                method: 'GET',
+                isBinary: true
+            })
+        });
+        if (!v.ok) throw new Error('Failed to fetch image ' + fname + ' (' + v.status + ')');
+        const blob = await v.blob();
+        return await new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(fr.result);
+            fr.onerror = () => reject(new Error('FileReader failed'));
+            fr.readAsDataURL(blob);
+        });
+    }
+
     async function queueAndWaitOne(base, wf, saveNodeId, status, index, total, tag) {
         const q = await fetch('/api/comfyui/proxy', {
             method: 'POST',
@@ -776,8 +901,9 @@
         if (!pid) throw new Error('No prompt_id from ComfyUI');
 
         if (status) status.innerHTML = `⏳ Generating ${index + 1} of ${total}${tag ? ' (' + tag + ')' : ''}…`;
+        console.log('[ComfyUI] queued', index + 1, '/', total, 'prompt_id=', pid, 'saveNode=', saveNodeId);
 
-        for (let i = 0; i < 90; i++) {
+        for (let i = 0; i < 120; i++) {
             await new Promise(r => setTimeout(r, 2000));
             try {
                 const h = await fetch('/api/comfyui/proxy', {
@@ -785,30 +911,20 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ baseUrl: base, path: `/history/${pid}`, method: 'GET' })
                 });
+                if (!h.ok) continue;
                 const hist = await h.json();
-                const out = hist[pid]?.outputs?.[saveNodeId]?.images?.[0];
-                if (!out?.filename) continue;
+                const entry = hist[pid];
+                if (!entry) continue;
 
-                const fname = out.filename;
-                const v = await fetch('/api/comfyui/proxy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        baseUrl: base,
-                        path: `/view?filename=${encodeURIComponent(fname)}&type=output`,
-                        method: 'GET',
-                        isBinary: true
-                    })
-                });
-                if (!v.ok) throw new Error('Failed to fetch image ' + fname);
-                const blob = await v.blob();
-                const dataUrl = await new Promise(resolve => {
-                    const fr = new FileReader();
-                    fr.onload = () => resolve(fr.result);
-                    fr.readAsDataURL(blob);
-                });
-                return { imageSrc: dataUrl, filename: fname };
-            } catch (e) { /* keep polling */ }
+                const images = extractHistoryImages(entry, saveNodeId);
+                if (!images.length) continue;
+
+                const dataUrl = await fetchComfyImageDataUrl(base, images[0]);
+                console.log('[ComfyUI] got image for gen', index + 1, images[0].filename);
+                return { imageSrc: dataUrl, filename: images[0].filename };
+            } catch (e) {
+                console.warn('[ComfyUI] poll error gen', index + 1, e.message || e);
+            }
         }
         throw new Error(`Timed out waiting for generation ${index + 1}`);
     }
@@ -820,8 +936,7 @@
         const weightDtype = resolveUnetDtype(ckpt);
 
         if (!useFlux) {
-            console.warn('[ComfyUI] Model does not look like Flux:', ckpt,
-                '— using SDXL/Pony workflow. Set Model/UNET to flux1-dev-fp8.safetensors and Save.');
+            console.warn('[ComfyUI] Model does not look like Flux:', ckpt);
         }
 
         const ipAdapterFile = localStorage.getItem('comfyui_ipadapter_model') || 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
@@ -841,7 +956,7 @@
         const total = count || getSelectedGenCount();
 
         console.log('[ComfyUI] mode:', useFlux ? 'FLUX' : 'SDXL/Pony',
-            'model:', ckpt, 'CLIP-L:', fluxClipL, 'T5:', fluxT5, 'dtype:', weightDtype);
+            'model:', ckpt, 'gens:', total, 'CLIP-L:', fluxClipL, 'T5:', fluxT5);
 
         let refFilename = null;
         if (!useFlux && charRefBase64) {
@@ -853,18 +968,22 @@
                 throw new Error('Character reference failed: ' + e.message);
             }
         } else if (useFlux && charRefBase64) {
-            console.warn('[ComfyUI] Character reference ignored on Flux path (IP-Adapter not wired for Flux yet)');
+            console.warn('[ComfyUI] Character reference ignored on Flux path');
         }
 
         const positiveText = buildComfyPrompt(useFlux);
         const negativeText = buildComfyNegative();
         let successCount = 0;
-        const tagParts = [useFlux ? 'Flux/' + weightDtype : 'Pony/' + ckpt.split('/').pop()];
+        const tagParts = [useFlux ? 'Flux/' + weightDtype : 'Pony'];
         if (loras.length) tagParts.push(loras.length + ' LoRA');
         if (refFilename) tagParts.push('IP-Adapter');
         const tag = tagParts.join(' · ');
 
-        if (status) status.innerHTML = `⏳ ${tag} — starting…`;
+        if (status) status.innerHTML = `⏳ ${tag} — starting ${total} gen(s)…`;
+
+        // Show results panel early so cards appear as they finish
+        const section = document.getElementById('sgResultsSection');
+        if (section) section.classList.remove('hidden');
 
         for (let i = 0; i < total; i++) {
             const seed = Math.floor(Math.random() * 1e9);
@@ -891,12 +1010,7 @@
 
             try {
                 const result = await queueAndWaitOne(base, wf, saveNodeId, status, i, total, tag);
-                const rd = { imageSrc: result.imageSrc, index: i, filename: result.filename };
-                generatedResults.push(rd);
-                const card = createResultCard(result.imageSrc, i, rd);
-                if (grid) grid.appendChild(card);
-                if (resultsSection) resultsSection.classList.remove('hidden');
-                if (successCount === 0) selectResult(card, rd);
+                appendResultCard(result.imageSrc, i, total);
                 successCount++;
                 if (status) status.innerHTML = `✅ ${successCount}/${total} done — continuing…`;
             } catch (e) {
@@ -906,7 +1020,7 @@
         }
 
         if (successCount === 0) throw new Error('All ComfyUI generations failed');
-        if (status) status.innerHTML = `✅ Generated ${successCount}/${total} · ${tag}`;
+        if (status) status.innerHTML = `✅ Generated ${successCount}/${total} · ${tag} — click a card to select`;
     }
 
     if (document.readyState === 'loading') {
