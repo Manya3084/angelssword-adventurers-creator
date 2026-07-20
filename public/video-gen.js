@@ -213,11 +213,13 @@
     }
 
     /**
-     * Fit full sprite into Wan canvas (contain + pad). Prevents head/feet crop from
-     * center-scaling a 720p full-body still into 832×480.
-     * Pad color is sampled from the top-left pixel (usually chroma key).
+     * Fit full sprite into Wan canvas (contain + pad + margin).
+     * Prevents head/feet crop when feeding a square or 720p full-body still into
+     * landscape Wan sizes (default 832×480). Pad uses top-left pixel (chroma key).
+     * margin (0–0.25) shrinks the character slightly so Wan is less likely to crop.
      */
-    function fitImageToWanCanvas(dataUrl, targetW, targetH) {
+    function fitImageToWanCanvas(dataUrl, targetW, targetH, margin) {
+        const m = (typeof margin === 'number' && margin >= 0 && margin < 0.4) ? margin : 0.08;
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.onload = () => {
@@ -226,7 +228,8 @@
                     const th = Math.max(64, targetH | 0);
                     const sw = img.naturalWidth || img.width;
                     const sh = img.naturalHeight || img.height;
-                    const scale = Math.min(tw / sw, th / sh);
+                    // Contain fit, then apply safety margin so head/feet aren't at the edge
+                    const scale = Math.min(tw / sw, th / sh) * (1 - m);
                     const dw = Math.max(1, Math.round(sw * scale));
                     const dh = Math.max(1, Math.round(sh * scale));
                     const ox = Math.floor((tw - dw) / 2);
@@ -313,7 +316,7 @@
         const neg = nid();
         wf[neg] = {
             class_type: 'CLIPTextEncode',
-            inputs: { text: 'blurry, low quality, distorted face, extra limbs, text, watermark, camera move, zoom, pan', clip: [clipLoad, 0] }
+            inputs: { text: 'blurry, low quality, distorted face, extra limbs, text, watermark, camera move, zoom, pan, cropped head, cropped feet, head cut off, feet cut off, close-up, upper body only, out of frame', clip: [clipLoad, 0] }
         };
 
         const unetLoad = nid();
@@ -471,9 +474,9 @@
         const ref = referenceImages[0];
         if (!ref?.dataUrl) throw new Error('No reference image');
 
-        status.innerHTML = `<div class="status-msg info"><span class="spinner"></span> Fitting full character to ${cfg.width}×${cfg.height} (no crop)…</div>`;
-        // 720p (or any) still → letterbox into Wan size so head/feet are not clipped
-        const fitted = await fitImageToWanCanvas(ref.dataUrl, cfg.width, cfg.height);
+        status.innerHTML = `<div class="status-msg info"><span class="spinner"></span> Fitting full character to ${cfg.width}×${cfg.height} (letterbox, no crop)…</div>`;
+        // Letterbox + 8% margin into Wan size so head/feet stay inside the frame
+        const fitted = await fitImageToWanCanvas(ref.dataUrl, cfg.width, cfg.height, 0.08);
         const imageName = await uploadImageToComfy(base, fitted, `as_wan_ref_${cfg.width}x${cfg.height}_${Date.now()}.png`);
 
         generatedVideos = [];
