@@ -24,6 +24,23 @@
         action: 'standing pose, confident expression'
     };
 
+    const SPRITE_W = 1280;
+    const SPRITE_H = 720;
+
+    /** Selected chroma key → strong background language for gen prompts */
+    function keyColorPromptBits(hex) {
+        const h = (hex || '#00FF00').toUpperCase();
+        const map = {
+            '#00FF00': 'solid pure bright chroma-key green (#00FF00)',
+            '#FF00FF': 'solid pure bright chroma-key magenta (#FF00FF)',
+            '#0000FF': 'solid pure bright chroma-key blue (#0000FF)',
+            '#FFFF00': 'solid pure bright chroma-key yellow (#FFFF00)',
+            '#00FFFF': 'solid pure bright chroma-key cyan (#00FFFF)'
+        };
+        const solid = map[h] || ('solid pure flat ' + h + ' chroma-key');
+        return solid + ' background, flat even fill, no gradients, no shadows on background, no floor, no scenery behind character';
+    }
+
     /** Same completion feedback as video-gen: sound + optional system notification + toast */
     function notifyGenerationComplete(message) {
         try {
@@ -207,7 +224,7 @@
             }
             #sgResultsGrid .result-card img {
                 width: 100%;
-                aspect-ratio: 1;
+                aspect-ratio: 16 / 9;
                 object-fit: cover;
                 border-radius: 6px;
             }
@@ -361,7 +378,10 @@
         const name = getFieldValue('sgCharName', DEFAULTS.name);
         const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
         const action = getFieldValue('sgCharAction', DEFAULTS.action);
-        let p = `Full body clean sprite of ${name}. ${desc}. ${action}. White background, game asset style, clean lines. Race: ${selectedRaceMode}.`;
+        const keyBg = keyColorPromptBits(selectedKeyColor);
+        let p = `Full body clean sprite of ${name}. ${desc}. ${action}. ` +
+            `${keyBg}. Full body head-to-toe in frame, not cropped, 16:9 landscape composition. ` +
+            `Game asset style, clean lines. Race: ${selectedRaceMode}.`;
         if (charRefBase64) p += ` Use the uploaded character reference for face, clothing and pose accuracy.`;
         if (styleRefBase64) p += ` Match the visual style of the uploaded style reference.`;
         return p;
@@ -371,11 +391,14 @@
         const name = getFieldValue('sgCharName', DEFAULTS.name);
         const desc = getFieldValue('sgCharDesc', DEFAULTS.desc);
         const action = getFieldValue('sgCharAction', DEFAULTS.action);
+        const keyBg = keyColorPromptBits(selectedKeyColor);
 
         if (useFlux) {
             let p = `A full-body character sprite of ${name}, ${desc}, ${action}, ` +
-                `solo, single character, centered, clean white background, simple background, ` +
-                `game asset style, character design, sharp focus, highly detailed, anime style`;
+                `solo, single character, centered, full body head to toe, not cropped, ` +
+                `${keyBg}, simple background, ` +
+                `game asset style, character design, sharp focus, highly detailed, anime style, ` +
+                `16:9 landscape frame`;
             if (selectedRaceMode === 'kanolith') p += ', animal features, furry';
             if (selectedRaceMode === 'zoalith') p += ', dragon features, scales';
             if (styleRefBase64) p += ', consistent art style, cohesive design';
@@ -385,10 +408,11 @@
         let positive =
             `score_9, score_8_up, score_7_up, source_anime, rating_safe, ` +
             `solo, single character, 1girl, one person, alone, ` +
-            `full body, standing, centered, clean sprite, white background, simple background, plain background, ` +
+            `full body, standing, centered, head to toe, not cropped, clean sprite, ` +
+            `${keyBg}, simple background, plain background, ` +
             `game asset, character design, character sheet style, ` +
             `${name}, ${desc}, ${action}, ` +
-            `sharp focus, highly detailed, anime style`;
+            `sharp focus, highly detailed, anime style, 16:9 landscape`;
         if (selectedRaceMode === 'kanolith') positive += ', animal features, furry';
         if (selectedRaceMode === 'zoalith') positive += ', dragon features, scales';
         return positive;
@@ -400,9 +424,11 @@
             'multiple characters, 2girls, 2boys, 3girls, 3boys, group, crowd, twins, clone, duplicate, ' +
             'extra people, two characters, three characters, many characters, ' +
             'blurry, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, ' +
-            'cropped, worst quality, low quality, normal quality, jpeg artifacts, ' +
+            'cropped, cropped head, cropped feet, head cut off, feet cut off, out of frame, ' +
+            'close-up, portrait only, upper body only, ' +
+            'worst quality, low quality, normal quality, jpeg artifacts, ' +
             'signature, watermark, username, artist name, ' +
-            'black background, solid black, empty, pure black, ' +
+            'black background, solid black, empty, pure black, white background, ' +
             'collage, split screen, comic panel, multiple views'
         );
     }
@@ -599,13 +625,13 @@
             res = await fetch('/api/edits', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'gpt-image-2', prompt, n, size: '1024x1024', images: [charRefBase64] })
+                body: JSON.stringify({ model: 'gpt-image-2', prompt, n, size: '1536x1024', images: [charRefBase64] })
             });
         } else {
             res = await fetch('/api/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'gpt-image-2', prompt, n, size: '1024x1024' })
+                body: JSON.stringify({ model: 'gpt-image-2', prompt, n, size: '1536x1024' })
             });
         }
         if (!res.ok) throw new Error(await res.text());
@@ -762,7 +788,7 @@
         const latentId = String(nextId++);
         wf[latentId] = {
             class_type: 'EmptySD3LatentImage',
-            inputs: { width: 1024, height: 1024, batch_size: 1 }
+            inputs: { width: SPRITE_W, height: SPRITE_H, batch_size: 1 }
         };
 
         const sampleId = String(nextId++);
@@ -862,7 +888,7 @@
             };
             wf[posId] = { class_type: 'CLIPTextEncode', inputs: { text: positiveText, clip: clipRef } };
             wf[negId] = { class_type: 'CLIPTextEncode', inputs: { text: negativeText, clip: clipRef } };
-            wf[latentId] = { class_type: 'EmptyLatentImage', inputs: { width: 1216, height: 832, batch_size: 1 } };
+            wf[latentId] = { class_type: 'EmptyLatentImage', inputs: { width: SPRITE_W, height: SPRITE_H, batch_size: 1 } };
             wf[sampleId] = {
                 class_type: 'KSampler',
                 inputs: {
@@ -890,7 +916,7 @@
 
         wf[posId] = { class_type: 'CLIPTextEncode', inputs: { text: positiveText, clip: clipRef } };
         wf[negId] = { class_type: 'CLIPTextEncode', inputs: { text: negativeText, clip: clipRef } };
-        wf[latentId] = { class_type: 'EmptyLatentImage', inputs: { width: 1216, height: 832, batch_size: 1 } };
+        wf[latentId] = { class_type: 'EmptyLatentImage', inputs: { width: SPRITE_W, height: SPRITE_H, batch_size: 1 } };
         wf[sampleId] = {
             class_type: 'KSampler',
             inputs: {
