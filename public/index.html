@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -252,58 +252,85 @@
                             <div class="mode-selector" id="vgProvider">
                                 <button class="mode-btn active" data-provider="gemini" title="Use Google Gemini Omni Flash">🎬 Gemini</button>
                                 <button class="mode-btn" data-provider="grok" title="Use Grok Imagine (SuperGrok OAuth)">✨ Grok</button>
+                                <button class="mode-btn" data-provider="comfyui" title="Local ComfyUI Wan I2V (~6s emotion clips)">🖥️ ComfyUI</button>
                             </div>
-                            <div class="text-dim mt-1" style="font-size:0.7rem">Grok uses your SuperGrok / X Premium+ subscription via OAuth.</div>
+                            <div class="text-dim mt-1" style="font-size:0.7rem">Grok uses SuperGrok OAuth. ComfyUI uses models from Settings → ComfyUI → Video.</div>
                         </div>
 
-                        <div class="mode-selector" id="vgModeSelector">
-                            <button class="mode-btn active" data-mode="reference">🖼️ Reference Mode</button>
-                            <button class="mode-btn" data-mode="keyframe">🔑 Keyframe Mode</button>
-                        </div>
-
-                        <div id="vgReferenceMode">
+                        <!-- ComfyUI-only: emotion clip presets -->
+                        <div id="vgComfyOptions" class="hidden">
                             <div class="form-row">
-                                <label for="vgPrompt">Animation Prompt</label>
-                                <textarea id="vgPrompt" rows="6">Locked-off Position Static Camera. Perfect Seamless Loop. 2d Anime Sakuga Game Animation Style. (Character description), (Animation Type) Subtle Movements.
-
-[Constraints]: Do NOT Camera Zoom, Absolute static camera. Zero Camera movement, no panning, no drifting, and no zooming. The camera is perfectly stationary; only the character moves. The character herself doesnt move either on the Y axis. Maintain the same character position.</textarea>
+                                <label>Emotion clips (Wan I2V ~6s)</label>
+                                <div id="vgEmotionPresets" style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-top:0.35rem">
+                                    <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer">
+                                        <input type="checkbox" value="idle" checked> Idle
+                                    </label>
+                                    <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer">
+                                        <input type="checkbox" value="talk_neutral" checked> Talk Neutral
+                                    </label>
+                                    <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer">
+                                        <input type="checkbox" value="talk_happy"> Talk Happy
+                                    </label>
+                                    <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer">
+                                        <input type="checkbox" value="talk_sad"> Talk Sad
+                                    </label>
+                                </div>
+                                <div class="text-dim mt-1" style="font-size:0.7rem">Each checked emotion queues a separate Wan clip from the reference still.</div>
                             </div>
+                            <div class="text-dim" style="font-size:0.7rem;margin-bottom:0.5rem">Optional extra direction: fill the Animation Prompt under Gemini/Grok Reference Mode first (it is still used when appended to emotion presets), or leave empty for pure presets.</div>
                         </div>
 
-                        <div id="vgKeyframeMode" class="hidden">
-                            <div class="two-col">
-                                <div class="form-row">
-                                    <label>Start Frame</label>
-                                    <div class="upload-zone" id="vgStartFrameZone" style="padding:1rem">
-                                        <div class="upload-icon" style="font-size:1.5rem" id="vgStartFrameIcon">🏁</div>
-                                        <div class="upload-text" style="font-size:0.75rem" id="vgStartFrameText">Start Frame</div>
-                                        <input type="file" id="vgStartFrameInput" accept="image/*">
-                                        <img id="vgStartFramePreview" class="hidden" style="max-width:100%;max-height:180px;border-radius:var(--radius);border:1px solid var(--border);margin-top:0.5rem">
-                                    </div>
-                                </div>
-                                <div class="form-row">
-                                    <label>End Frame</label>
-                                    <div class="upload-zone" id="vgEndFrameZone" style="padding:1rem">
-                                        <div class="upload-icon" style="font-size:1.5rem" id="vgEndFrameIcon">🎯</div>
-                                        <div class="upload-text" style="font-size:0.75rem" id="vgEndFrameText">End Frame</div>
-                                        <input type="file" id="vgEndFrameInput" accept="image/*">
-                                        <img id="vgEndFramePreview" class="hidden" style="max-width:100%;max-height:180px;border-radius:var(--radius);border:1px solid var(--border);margin-top:0.5rem">
-                                    </div>
-                                </div>
+                        <!-- Cloud providers: Gemini / Grok -->
+                        <div id="vgCloudOptions">
+                            <div class="mode-selector" id="vgModeSelector">
+                                <button class="mode-btn active" data-mode="reference">🖼️ Reference Mode</button>
+                                <button class="mode-btn" data-mode="keyframe">🔑 Keyframe Mode</button>
                             </div>
-                            <div class="form-row mt-1">
-                                <label for="vgKeyframePrompt">Animation Prompt</label>
-                                <textarea id="vgKeyframePrompt" rows="6">Locked-off Position Static Camera. Perfect Seamless Loop. 2d Anime Sakuga Game Animation Style. (Character description), (Animation Type) Subtle Movements.
+
+                            <div id="vgReferenceMode">
+                                <div class="form-row">
+                                    <label for="vgPrompt">Animation Prompt</label>
+                                    <textarea id="vgPrompt" rows="6">Locked-off Position Static Camera. Perfect Seamless Loop. 2d Anime Sakuga Game Animation Style. (Character description), (Animation Type) Subtle Movements.
 
 [Constraints]: Do NOT Camera Zoom, Absolute static camera. Zero Camera movement, no panning, no drifting, and no zooming. The camera is perfectly stationary; only the character moves. The character herself doesnt move either on the Y axis. Maintain the same character position.</textarea>
+                                </div>
+                            </div>
+
+                            <div id="vgKeyframeMode" class="hidden">
+                                <div class="two-col">
+                                    <div class="form-row">
+                                        <label>Start Frame</label>
+                                        <div class="upload-zone" id="vgStartFrameZone" style="padding:1rem">
+                                            <div class="upload-icon" style="font-size:1.5rem" id="vgStartFrameIcon">🏁</div>
+                                            <div class="upload-text" style="font-size:0.75rem" id="vgStartFrameText">Start Frame</div>
+                                            <input type="file" id="vgStartFrameInput" accept="image/*">
+                                            <img id="vgStartFramePreview" class="hidden" style="max-width:100%;max-height:180px;border-radius:var(--radius);border:1px solid var(--border);margin-top:0.5rem">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label>End Frame</label>
+                                        <div class="upload-zone" id="vgEndFrameZone" style="padding:1rem">
+                                            <div class="upload-icon" style="font-size:1.5rem" id="vgEndFrameIcon">🎯</div>
+                                            <div class="upload-text" style="font-size:0.75rem" id="vgEndFrameText">End Frame</div>
+                                            <input type="file" id="vgEndFrameInput" accept="image/*">
+                                            <img id="vgEndFramePreview" class="hidden" style="max-width:100%;max-height:180px;border-radius:var(--radius);border:1px solid var(--border);margin-top:0.5rem">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="form-row mt-1">
+                                    <label for="vgKeyframePrompt">Animation Prompt</label>
+                                    <textarea id="vgKeyframePrompt" rows="6">Locked-off Position Static Camera. Perfect Seamless Loop. 2d Anime Sakuga Game Animation Style. (Character description), (Animation Type) Subtle Movements.
+
+[Constraints]: Do NOT Camera Zoom, Absolute static camera. Zero Camera movement, no panning, no drifting, and no zooming. The camera is perfectly stationary; only the character moves. The character herself doesnt move either on the Y axis. Maintain the same character position.</textarea>
+                                </div>
                             </div>
                         </div>
 
                         <hr class="gold-divider">
 
                         <div class="config-grid">
-                            <div class="form-row"><label for="vgDuration">Video Length</label><div class="range-row"><input type="range" id="vgDuration" min="3" max="10" value="5"><span class="range-value" id="vgDurationVal">5s</span></div></div>
-                            <div class="form-row">
+                            <div class="form-row"><label for="vgDuration">Video Length</label><div class="range-row"><input type="range" id="vgDuration" min="3" max="10" value="6"><span class="range-value" id="vgDurationVal">6s</span></div></div>
+                            <div class="form-row" id="vgGenCountRow">
                                 <label>Simultaneous Generations</label>
                                 <div class="gen-count" id="vgGenCount">
                                     <button class="gen-count-btn active" data-count="1">1</button>
@@ -333,8 +360,8 @@
                 <div>
                     <div class="glass-panel">
                         <div class="panel-title"><span class="title-icon">ℹ️</span> About Video Generation</div>
-                        <div class="panel-subtitle">Use <strong>Gemini Omni Flash</strong> or <strong>Grok Imagine</strong> (via SuperGrok OAuth) to generate short animated videos from your sprite.</div>
-                        <div class="settings-info"><span class="info-icon">🔑</span> Google key or SuperGrok login required. Configure in the <strong>Settings</strong> tab.</div>
+                        <div class="panel-subtitle">Use <strong>Gemini Omni Flash</strong>, <strong>Grok Imagine</strong> (SuperGrok OAuth), or local <strong>ComfyUI Wan I2V</strong> for short emotion clips from your sprite.</div>
+                        <div class="settings-info"><span class="info-icon">🔑</span> Cloud providers need Google key or SuperGrok login. ComfyUI needs models configured in <strong>Settings → ComfyUI → Video</strong>.</div>
                     </div>
                 </div>
             </div>
@@ -511,10 +538,6 @@
                         <div class="glass-panel">
                             <div class="form-row"><label for="exStartFrame">Start Frame</label><input type="number" id="exStartFrame" value="0" min="0"></div>
                             <div class="form-row"><label for="exEndFrame">End Frame</label><input type="number" id="exEndFrame" value="0" min="0"></div>
-                            <div class="form-row"><label for="exFrameSkip">Frame Skip</label><input type="number" id="exFrameSkip" value="0" min="0" max="10"></div>
-                            <div class="form-row"><label for="exFPS">FPS Override</label><input type="number" id="exFPS" value="0" min="0" max="60"></div>
-                            <div class="form-row"><label for="exWidth">Output Width</label><input type="number" id="exWidth" value="0" min="0"></div>
-                            <div class="form-row"><label for="exHeight">Output Height</label><div class="flex items-center gap-sm"><input type="number" id="exHeight" value="0" min="0" style="flex:1"><label class="toggle-switch"><input type="checkbox" id="exAspectLock" checked><span class="slider"></span></label><span class="text-dim" style="font-size:0.7rem">🔒</span></div></div>
                             <div class="form-row"><label for="exFrameSkip">Frame Skip</label><input type="number" id="exFrameSkip" value="0" min="0" max="10"></div>
                             <div class="form-row"><label for="exFPS">FPS Override</label><input type="number" id="exFPS" value="0" min="0" max="60"></div>
                             <div class="form-row"><label for="exWidth">Output Width</label><input type="number" id="exWidth" value="0" min="0"></div>
