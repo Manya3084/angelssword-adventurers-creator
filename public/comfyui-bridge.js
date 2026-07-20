@@ -346,7 +346,7 @@
                             <input type="number" id="comfyuiWanWidth" value="${getSetting('WAN_WIDTH')}" min="256" max="1280" style="flex:1">
                             <input type="number" id="comfyuiWanHeight" value="${getSetting('WAN_HEIGHT')}" min="256" max="1280" style="flex:1">
                         </div>
-                        <div class="text-dim mt-1" style="font-size:0.7rem">Default 832×480 (~480p landscape)</div>
+                        <div class="text-dim mt-1" style="font-size:0.7rem">Default 832×480 (480p Wan). Stills are letterboxed so head/feet are not cropped.</div>
                     </div>
                     <div class="form-row">
                         <label>Frames <span class="text-dim">(97 ≈ 6s @ 16fps, prefer 4n+1)</span></label>
